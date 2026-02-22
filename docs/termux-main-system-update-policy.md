@@ -115,7 +115,8 @@ tmux send-keys -t openclaw 'export PATH="$HOME/.npm-global/bin:/data/data/com.te
 - Keep boot scripts present: `~/.termux/boot/start-openclaw.sh` and `~/.termux/boot/openclaw-launch.sh`.
 - Keep Termux:Boot (`com.termux.boot`) installed so OpenClaw can auto-start after reboot.
 - Keep watchdog running (`tmux` session: `openclaw-watchdog`) with valid `~/.openclaw-watchdog.env`.
-- Before system update, send Telegram command `更新主系統`; after success, send `更新成功` (handshake complete).
+- Use local handshake by default: `dogmaint_start` before update, `dogmaint_ok` after update.
+- Only use Telegram handshake commands when watchdog has a dedicated bot token (`WATCHDOG_TELEGRAM_POLL_ENABLED=1` + `WATCHDOG_TELEGRAM_BOT_TOKEN`).
 
 ## Version label
 

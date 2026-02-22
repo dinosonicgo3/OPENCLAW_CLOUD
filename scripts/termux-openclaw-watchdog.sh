@@ -25,6 +25,8 @@ STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-300}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-}"
+WATCHDOG_TELEGRAM_BOT_TOKEN="${WATCHDOG_TELEGRAM_BOT_TOKEN:-}"
+WATCHDOG_TELEGRAM_POLL_ENABLED="${WATCHDOG_TELEGRAM_POLL_ENABLED:-0}"
 NVIDIA_API_KEY="${NVIDIA_API_KEY:-}"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
@@ -218,14 +220,31 @@ handle_command() {
 }
 
 poll_telegram_updates() {
-  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_OWNER_ID" ]; then
+  local poll_flag
+  poll_flag="$(printf '%s' "$WATCHDOG_TELEGRAM_POLL_ENABLED" | tr '[:upper:]' '[:lower:]')"
+  case "$poll_flag" in
+    1|true|yes|on)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if [ -z "$WATCHDOG_TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_OWNER_ID" ]; then
+    log "telegram polling disabled: missing WATCHDOG_TELEGRAM_BOT_TOKEN or TELEGRAM_OWNER_ID"
+    WATCHDOG_TELEGRAM_POLL_ENABLED="0"
+    return 0
+  fi
+  if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ "$WATCHDOG_TELEGRAM_BOT_TOKEN" = "$TELEGRAM_BOT_TOKEN" ]; then
+    log "telegram polling disabled: watchdog token matches primary bot token"
+    WATCHDOG_TELEGRAM_POLL_ENABLED="0"
     return 0
   fi
 
   local last_id offset resp ids id max_id
   last_id="$(state_get '.last_update_id // 0')"
   offset="$((last_id + 1))"
-  resp="$(curl -fsS --max-time 40 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?timeout=25&offset=${offset}" 2>/dev/null || true)"
+  resp="$(curl -fsS --max-time 40 "https://api.telegram.org/bot${WATCHDOG_TELEGRAM_BOT_TOKEN}/getUpdates?timeout=25&offset=${offset}" 2>/dev/null || true)"
   [ -z "$resp" ] && return 0
   if [ "$(printf '%s' "$resp" | jq -r '.ok // false')" != "true" ]; then
     return 0
@@ -284,7 +303,7 @@ monitor_once() {
 }
 
 run_daemon() {
-  local existing now
+  local existing now poll_mode
   state_init
   if [ -f "$PID_FILE" ]; then
     existing="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -298,7 +317,11 @@ run_daemon() {
 
   now="$(date +%s)"
   state_set ".started_at=${now} | .last_monitor_ts=${now}"
-  log "started v${WATCHDOG_VERSION}, poll=${POLL_INTERVAL_SECONDS}s, monitor=${MONITOR_INTERVAL_SECONDS}s"
+  poll_mode="disabled"
+  case "$(printf '%s' "$WATCHDOG_TELEGRAM_POLL_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) poll_mode="enabled" ;;
+  esac
+  log "started v${WATCHDOG_VERSION}, poll=${POLL_INTERVAL_SECONDS}s, monitor=${MONITOR_INTERVAL_SECONDS}s, telegram_command_poll=${poll_mode}"
   send_telegram "🐶 Watchdog 已啟動（v${WATCHDOG_VERSION}）"
   while true; do
     monitor_once
