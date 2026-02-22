@@ -267,7 +267,8 @@ mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
 export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
 termux-wake-lock >/dev/null 2>&1 || true
 sleep 8
-if ! ss -ltn 2>/dev/null | grep -q ':18789 '; then
+OPENCLAW_PORT="${OPENCLAW_PORT:-$(jq -r '.gateway.port // 18789' "$HOME/.openclaw/openclaw.json" 2>/dev/null || echo 18789)}"
+if ! ss -ltn 2>/dev/null | grep -q ":${OPENCLAW_PORT} "; then
   if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1; then
     if ! tmux has-session -t openclaw 2>/dev/null; then
       tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"
