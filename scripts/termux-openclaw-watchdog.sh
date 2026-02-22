@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.3.0"
+WATCHDOG_VERSION="1.4.0"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
@@ -14,6 +14,8 @@ PID_FILE="$STATE_DIR/daemon.pid"
 REPO_DIR_DEFAULT="$HOME_DIR/DINO_OPENCLAW"
 REPO_DIR="${OPENCLAW_REPO_DIR:-$REPO_DIR_DEFAULT}"
 REPO_BRANCH="${OPENCLAW_REPO_BRANCH:-main}"
+CORE_GUARD_SCRIPT="${OPENCLAW_CORE_GUARD_SCRIPT:-$REPO_DIR/scripts/termux-openclaw-core-guard.sh}"
+OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-$HOME_DIR/.termux/boot/openclaw-launch.sh}"
 
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-180}"
 MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-1800}"
@@ -37,6 +39,11 @@ if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   . "$ENV_FILE"
 fi
+
+REPO_DIR="${OPENCLAW_REPO_DIR:-$REPO_DIR_DEFAULT}"
+REPO_BRANCH="${OPENCLAW_REPO_BRANCH:-main}"
+CORE_GUARD_SCRIPT="${OPENCLAW_CORE_GUARD_SCRIPT:-$REPO_DIR/scripts/termux-openclaw-core-guard.sh}"
+OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-$HOME_DIR/.termux/boot/openclaw-launch.sh}"
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ] && [ -f "$HOME_DIR/.openclaw/openclaw.json" ]; then
   TELEGRAM_BOT_TOKEN="$(jq -r '.channels.telegram.botToken // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || true)"
@@ -98,6 +105,48 @@ send_telegram() {
     -d "chat_id=${TELEGRAM_OWNER_ID}" \
     --data-urlencode "text=${msg}" \
     -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
+}
+
+run_core_guard() {
+  if [ ! -x "$CORE_GUARD_SCRIPT" ]; then
+    log "core guard script missing: $CORE_GUARD_SCRIPT"
+    printf 'missing\n'
+    return 1
+  fi
+
+  local out rc
+  out="$("$CORE_GUARD_SCRIPT" --fix 2>/dev/null)" || rc=$?
+  rc="${rc:-0}"
+  case "$rc:$out" in
+    0:changed)
+      log "core guard healed unsafe config"
+      printf 'changed\n'
+      return 0
+      ;;
+    0:unchanged)
+      printf 'unchanged\n'
+      return 0
+      ;;
+    *)
+      log "core guard failed: rc=${rc}"
+      printf 'error\n'
+      return 1
+      ;;
+  esac
+}
+
+restart_openclaw_after_guard() {
+  if [ ! -x "$OPENCLAW_BOOT_SCRIPT" ]; then
+    log "boot script missing for guarded restart: $OPENCLAW_BOOT_SCRIPT"
+    return 1
+  fi
+  tmux kill-session -t openclaw >/dev/null 2>&1 || true
+  pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
+  pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
+  pkill -9 -x openclaw >/dev/null 2>&1 || true
+  tmux new -d -s openclaw "$OPENCLAW_BOOT_SCRIPT"
+  sleep 10
+  openclaw_healthy
 }
 
 enter_maintenance() {
@@ -163,6 +212,7 @@ rollback_and_rebuild() {
     send_telegram "❌ Watchdog 救援失敗：重建腳本執行失敗（${target}）"
     return 1
   }
+  run_core_guard >/dev/null 2>&1 || true
 
   sleep 8
   if openclaw_healthy; then
@@ -266,7 +316,7 @@ poll_telegram_updates() {
 }
 
 monitor_once() {
-  local now active deadline last_monitor
+  local now active deadline last_monitor guard_result
   now="$(date +%s)"
   poll_telegram_updates
 
@@ -281,6 +331,16 @@ monitor_once() {
       trigger_rescue "maintenance-timeout"
     fi
     return 0
+  fi
+
+  guard_result="$(run_core_guard 2>/dev/null || true)"
+  if [ "$guard_result" = "changed" ]; then
+    send_telegram "🩹 Watchdog: 偵測到危險配置已自動修復，正在重啟 OpenClaw。"
+    if restart_openclaw_after_guard; then
+      log "guard-triggered restart success"
+    else
+      log "guard-triggered restart failed; rescue may be required"
+    fi
   fi
 
   last_monitor="$(state_get '.last_monitor_ts // 0')"
@@ -303,7 +363,7 @@ monitor_once() {
 }
 
 run_daemon() {
-  local existing now poll_mode
+  local existing now poll_mode guard_result
   state_init
   if [ -f "$PID_FILE" ]; then
     existing="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -317,6 +377,10 @@ run_daemon() {
 
   now="$(date +%s)"
   state_set ".started_at=${now} | .last_monitor_ts=${now}"
+  guard_result="$(run_core_guard 2>/dev/null || true)"
+  if [ "$guard_result" = "changed" ]; then
+    send_telegram "🩹 Watchdog: 開機時修復了 OpenClaw 危險配置。"
+  fi
   poll_mode="disabled"
   case "$(printf '%s' "$WATCHDOG_TELEGRAM_POLL_ENABLED" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on) poll_mode="enabled" ;;

@@ -23,6 +23,7 @@ Run all checks before update:
 export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
 tmux ls
 openclaw --version
+coreguard
 jq -r '.agents.defaults.model.primary,.channels.telegram.enabled' ~/.openclaw/openclaw.json
 ```
 
@@ -62,6 +63,7 @@ npm install -g openclaw@latest
 ### 4) Validate required config
 
 ```bash
+jq -r '.gateway.bind,.gateway.auth.mode,.gateway.auth.token // empty,.gateway.auth.password // empty' ~/.openclaw/openclaw.json
 jq -r '.agents.defaults.model.primary,.agents.defaults.model.fallbacks[0],.channels.telegram.enabled,.channels.telegram.allowFrom[0]' ~/.openclaw/openclaw.json
 ```
 
@@ -74,6 +76,7 @@ Expected values:
   - `nvidia/openai/gpt-oss-120b`
   - `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - telegram enabled: `true`
+- if `gateway.bind=lan`, `gateway.auth.mode` must not be `none`
 
 ### 5) Start runtime
 
@@ -86,6 +89,7 @@ tmux send-keys -t openclaw 'export PATH="$HOME/.npm-global/bin:/data/data/com.te
 
 ```bash
 tail -n 60 ~/openclaw-logs/gateway.log
+tail -n 60 ~/openclaw-logs/core-guard.log
 ```
 
 Check for:
@@ -117,6 +121,8 @@ tmux send-keys -t openclaw 'export PATH="$HOME/.npm-global/bin:/data/data/com.te
 - Keep watchdog running (`tmux` session: `openclaw-watchdog`) with valid `~/.openclaw-watchdog.env`.
 - Use local handshake by default: `dogmaint_start` before update, `dogmaint_ok` after update.
 - Only use Telegram handshake commands when watchdog has a dedicated bot token (`WATCHDOG_TELEGRAM_POLL_ENABLED=1` + `WATCHDOG_TELEGRAM_BOT_TOKEN`).
+- Run `coreguard` before and after update window; fix any unsafe drift immediately.
+- Never set `gateway.auth.mode=none` when `gateway.bind=lan`.
 
 ## Version label
 

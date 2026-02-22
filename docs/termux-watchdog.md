@@ -6,8 +6,19 @@ This watchdog runs independently from OpenClaw and is started with phone boot.
 
 - Optional Telegram command polling every 3 minutes (disabled by default to avoid bot conflicts with main OpenClaw service).
 - Runs OpenClaw health checks every 30 minutes.
+- Runs `termux-openclaw-core-guard.sh --fix` before health checks to auto-heal dangerous gateway auth drift.
 - Auto-rolls back to latest git tag matching `穩定版*` when rescue is needed.
 - Sends rescue and status messages back to Telegram owner.
+
+## Why this guard is required
+
+One observed crash pattern was:
+
+- `gateway.bind=lan`
+- `gateway.auth.mode=none`
+
+OpenClaw correctly refuses this startup state (`Refusing to bind gateway to lan without auth`).  
+`core-guard` now prevents this by auto-enforcing token/password auth when LAN binding is enabled.
 
 ## Default no-conflict mode
 
@@ -47,6 +58,7 @@ WATCHDOG_TELEGRAM_BOT_TOKEN="<dedicated_watchdog_bot_token>"
 ## Runtime files
 
 - Watchdog script: `scripts/termux-openclaw-watchdog.sh`
+- Core guard script: `scripts/termux-openclaw-core-guard.sh`
 - Env config: `~/.openclaw-watchdog.env`
 - State file: `~/.openclaw-watchdog/state.json`
 - Log file: `~/openclaw-logs/watchdog.log`

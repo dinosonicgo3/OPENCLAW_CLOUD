@@ -20,6 +20,9 @@ cleanup_block() {
   sed -i "/${begin}/,/${end}/d" "$file"
 }
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
 if [ "${PREFIX:-}" != "/data/data/com.termux/files/usr" ]; then
   log "this script must run inside Termux"
   exit 1
@@ -97,6 +100,8 @@ NVIDIA_API_KEY="${NVIDIA_API_KEY:-}"
 TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-6002298888}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(date +%s | sha256sum | cut -c1-24)}"
+OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$REPO_DIR}"
+CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
   log "TELEGRAM_BOT_TOKEN is required"
@@ -203,19 +208,25 @@ jq -n \
     }
   }' >"$HOME/.openclaw/openclaw.json"
 
+if [ "$OPENCLAW_TERMUX_REPO_DIR" != "$HOME/DINO_OPENCLAW" ]; then
+  ln -sfn "$OPENCLAW_TERMUX_REPO_DIR" "$HOME/DINO_OPENCLAW"
+fi
+
 cleanup_block "$HOME/.bashrc" "# --- OPENCLAW_TERMUX_RUNTIME_BEGIN ---" "# --- OPENCLAW_TERMUX_RUNTIME_END ---"
 cat >>"$HOME/.bashrc" <<'EOF'
 # --- OPENCLAW_TERMUX_RUNTIME_BEGIN ---
 export PATH="$HOME/.npm-global/bin:$PATH"
 export TMPDIR="$HOME/tmp"
+export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
 alias ocr='pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true; pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true; pkill -x openclaw >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true; tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"'
 alias oclog='tmux attach -t openclaw'
 alias ockill='pkill -9 -f "openclaw" >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true'
 alias doglog='tmux attach -t openclaw-watchdog'
-alias dogstatus='bash "$HOME/DINO_OPENCLAW/scripts/termux-openclaw-watchdog.sh" --status'
-alias dogrescue='bash "$HOME/DINO_OPENCLAW/scripts/termux-openclaw-watchdog.sh" --rescue manual'
-alias dogmaint_start='bash "$HOME/DINO_OPENCLAW/scripts/termux-openclaw-watchdog.sh" --maintenance-start manual'
-alias dogmaint_ok='bash "$HOME/DINO_OPENCLAW/scripts/termux-openclaw-watchdog.sh" --maintenance-ok manual'
+alias dogstatus='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --status'
+alias dogrescue='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --rescue manual'
+alias dogmaint_start='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --maintenance-start manual'
+alias dogmaint_ok='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --maintenance-ok manual'
+alias coreguard='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-core-guard.sh" --fix'
 # --- OPENCLAW_TERMUX_RUNTIME_END ---
 EOF
 
@@ -227,6 +238,10 @@ set -eu
 export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
 export TMPDIR="$HOME/tmp"
 mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
+export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
+if [ -x "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh" ]; then
+  "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh" --fix >>"$HOME/openclaw-logs/core-guard.log" 2>&1 || true
+fi
 exec openclaw gateway --allow-unconfigured >>"$HOME/openclaw-logs/gateway.log" 2>&1
 EOF
 cat >"$HOME/.termux/boot/openclaw-watchdog-launch.sh" <<'EOF'
@@ -236,7 +251,8 @@ export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
 export TMPDIR="$HOME/tmp"
 mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
 export OPENCLAW_WATCHDOG_ENV="$HOME/.openclaw-watchdog.env"
-exec "$HOME/DINO_OPENCLAW/scripts/termux-openclaw-watchdog.sh" --daemon >>"$HOME/openclaw-logs/watchdog.log" 2>&1
+export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
+exec "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-watchdog.sh" --daemon >>"$HOME/openclaw-logs/watchdog.log" 2>&1
 EOF
 cat >"$HOME/.termux/boot/start-openclaw.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -244,6 +260,7 @@ set -eu
 export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
 export TMPDIR="$HOME/tmp"
 mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
+export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
 termux-wake-lock >/dev/null 2>&1 || true
 sleep 8
 if ! ss -ltn 2>/dev/null | grep -q ':18789 '; then
@@ -256,11 +273,14 @@ fi
 tmux has-session -t openclaw-watchdog 2>/dev/null || tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
 EOF
 chmod 700 "$HOME/.termux/boot/openclaw-launch.sh" "$HOME/.termux/boot/openclaw-watchdog-launch.sh" "$HOME/.termux/boot/start-openclaw.sh"
+if [ -f "$CORE_GUARD_SCRIPT" ]; then
+  chmod 700 "$CORE_GUARD_SCRIPT"
+fi
 
 if [ "$SKIP_WATCHDOG" != "1" ]; then
 log "writing watchdog env"
 cat >"$HOME/.openclaw-watchdog.env" <<EOF
-OPENCLAW_REPO_DIR="$HOME/DINO_OPENCLAW"
+OPENCLAW_REPO_DIR="$OPENCLAW_TERMUX_REPO_DIR"
 OPENCLAW_REPO_BRANCH="main"
 OPENCLAW_PORT="$OPENCLAW_PORT"
 TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"

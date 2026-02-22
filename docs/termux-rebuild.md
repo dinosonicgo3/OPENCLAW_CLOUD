@@ -44,6 +44,7 @@ bash scripts/termux-rebuild-openclaw.sh
 oclog   # attach gateway logs
 ocr     # restart OpenClaw gateway in tmux
 ockill  # stop OpenClaw
+coreguard # enforce safe gateway auth config
 ```
 
 ## 5) Boot auto-start
@@ -54,6 +55,7 @@ The rebuild script writes:
 - `~/.termux/boot/openclaw-launch.sh`
 - `~/.termux/boot/openclaw-watchdog-launch.sh`
 - `~/.openclaw-watchdog.env`
+- `scripts/termux-openclaw-core-guard.sh` (used by launcher/watchdog)
 
 Verify:
 
