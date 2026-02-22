@@ -6,7 +6,6 @@ SHARED_ROOT="${OPENCLAW_SHARED_ROOT:-$HOME_DIR/storage/shared}"
 WORKSPACE_LINK="${OPENCLAW_WORKSPACE_PATH:-$HOME_DIR/.openclaw/workspace}"
 REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME_DIR/DINO_OPENCLAW}"
 LOG_FILE="${OPENCLAW_OBSIDIAN_LOG:-$HOME_DIR/openclaw-logs/obsidian-integration.log}"
-DEFAULT_VAULT_DIR="$SHARED_ROOT/Documents/OpenClawVault"
 VAULT_DIR="${OPENCLAW_OBSIDIAN_VAULT_DIR:-}"
 RESTART_AFTER_LINK="${OPENCLAW_OBSIDIAN_RESTART:-1}"
 
@@ -24,27 +23,42 @@ is_obsidian_installed() {
   pm list packages 2>/dev/null | grep -q '^package:md\.obsidian$'
 }
 
+resolve_shared_root() {
+  local candidate
+  for candidate in "$SHARED_ROOT" "/storage/emulated/0" "/sdcard"; do
+    if [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 detect_vault_dir() {
-  local found
+  local found root default_vault
+  root="$(resolve_shared_root || true)"
+  default_vault="${root}/Documents/OpenClawVault"
   if [ -n "$VAULT_DIR" ]; then
     printf '%s\n' "$VAULT_DIR"
     return 0
   fi
-  if [ -d "$SHARED_ROOT" ]; then
-    found="$(find "$SHARED_ROOT" -maxdepth 6 -type d -name .obsidian 2>/dev/null | head -n 1 || true)"
+  if [ -n "$root" ] && [ -d "$root" ]; then
+    found="$(find "$root" -maxdepth 6 -type d -name .obsidian 2>/dev/null | head -n 1 || true)"
     if [ -n "$found" ]; then
       dirname "$found"
       return 0
     fi
   fi
-  printf '%s\n' "$DEFAULT_VAULT_DIR"
+  printf '%s\n' "$default_vault"
 }
 
 status() {
-  local vault resolved
+  local vault resolved root
+  root="$(resolve_shared_root || true)"
   vault="$(detect_vault_dir)"
   echo "obsidian_package=$(if is_obsidian_installed; then echo yes; else echo no; fi)"
-  echo "shared_root=$SHARED_ROOT"
+  echo "shared_root_config=$SHARED_ROOT"
+  echo "shared_root_resolved=${root:-<missing>}"
   echo "vault_dir=$vault"
   echo "vault_exists=$(if [ -d "$vault" ]; then echo yes; else echo no; fi)"
   echo "vault_obsidian_dir=$(if [ -d "$vault/.obsidian" ]; then echo yes; else echo no; fi)"
@@ -103,13 +117,14 @@ restart_openclaw_if_needed() {
 }
 
 link_workspace_to_vault() {
-  local vault backup src
+  local vault backup src root
   if ! is_obsidian_installed; then
     log "obsidian package (md.obsidian) not found"
     exit 1
   fi
-  if [ ! -d "$SHARED_ROOT" ]; then
-    log "shared storage not ready: $SHARED_ROOT (run termux-setup-storage)"
+  root="$(resolve_shared_root || true)"
+  if [ -z "$root" ]; then
+    log "shared storage not ready (checked: $SHARED_ROOT, /storage/emulated/0, /sdcard)"
     exit 1
   fi
 
