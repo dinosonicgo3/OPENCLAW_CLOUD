@@ -165,7 +165,13 @@ link_workspace_to_vault() {
   fi
 
   vault="$(detect_vault_dir)"
-  mkdir -p "$vault" "$vault/.obsidian" "$HOME_DIR/.openclaw/backups"
+  mkdir -p "$HOME_DIR/.openclaw/backups"
+  if [ ! -d "$vault" ]; then
+    mkdir "$vault"
+  fi
+  if [ ! -d "$vault/.obsidian" ]; then
+    mkdir "$vault/.obsidian" >/dev/null 2>&1 || true
+  fi
 
   if [ -L "$WORKSPACE_LINK" ]; then
     src="$(readlink -f "$WORKSPACE_LINK" 2>/dev/null || true)"
