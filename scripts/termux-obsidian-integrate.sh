@@ -120,7 +120,10 @@ seed_workspace_files() {
   local source="$1"
   local target="$2"
   [ -d "$source" ] || return 0
-  mkdir -p "$target"
+  if [ ! -d "$target" ]; then
+    mkdir "$target" >/dev/null 2>&1 || true
+  fi
+  [ -d "$target" ] || return 0
   cp -a -n "$source"/. "$target"/ 2>/dev/null || true
 }
 
