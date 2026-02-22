@@ -34,31 +34,66 @@ resolve_shared_root() {
   return 1
 }
 
+shared_candidates() {
+  cat <<EOF
+$SHARED_ROOT
+/storage/emulated/0/Documents
+/storage/emulated/0/Android/data/com.termux/files
+/storage/emulated/0/Android/media/com.termux
+/sdcard/Documents
+$HOME_DIR/storage
+EOF
+}
+
+resolve_writable_base() {
+  local candidate probe
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    [ -d "$candidate" ] || continue
+    probe="$candidate/.openclaw_probe_$$"
+    if mkdir "$probe" >/dev/null 2>&1; then
+      rmdir "$probe" >/dev/null 2>&1 || true
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(shared_candidates)
+  return 1
+}
+
 detect_vault_dir() {
-  local found root default_vault
+  local found root default_vault writable_base
   root="$(resolve_shared_root || true)"
-  default_vault="${root}/Documents/OpenClawVault"
+  writable_base="$(resolve_writable_base || true)"
+  if [ -n "$writable_base" ]; then
+    default_vault="${writable_base}/OpenClawVault"
+  else
+    default_vault="${root}/Documents/OpenClawVault"
+  fi
   if [ -n "$VAULT_DIR" ]; then
     printf '%s\n' "$VAULT_DIR"
     return 0
   fi
-  if [ -n "$root" ] && [ -d "$root" ]; then
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    [ -d "$root" ] || continue
     found="$(find "$root" -maxdepth 6 -type d -name .obsidian 2>/dev/null | head -n 1 || true)"
     if [ -n "$found" ]; then
       dirname "$found"
       return 0
     fi
-  fi
+  done < <(shared_candidates)
   printf '%s\n' "$default_vault"
 }
 
 status() {
-  local vault resolved root
+  local vault resolved root writable_base
   root="$(resolve_shared_root || true)"
+  writable_base="$(resolve_writable_base || true)"
   vault="$(detect_vault_dir)"
   echo "obsidian_package=$(if is_obsidian_installed; then echo yes; else echo no; fi)"
   echo "shared_root_config=$SHARED_ROOT"
   echo "shared_root_resolved=${root:-<missing>}"
+  echo "writable_base=${writable_base:-<missing>}"
   echo "vault_dir=$vault"
   echo "vault_exists=$(if [ -d "$vault" ]; then echo yes; else echo no; fi)"
   echo "vault_obsidian_dir=$(if [ -d "$vault/.obsidian" ]; then echo yes; else echo no; fi)"
@@ -117,13 +152,14 @@ restart_openclaw_if_needed() {
 }
 
 link_workspace_to_vault() {
-  local vault backup src root
+  local vault backup src root writable_base
   if ! is_obsidian_installed; then
     log "obsidian package (md.obsidian) not found"
     exit 1
   fi
   root="$(resolve_shared_root || true)"
-  if [ -z "$root" ]; then
+  writable_base="$(resolve_writable_base || true)"
+  if [ -z "$root" ] || [ -z "$writable_base" ]; then
     log "shared storage not ready (checked: $SHARED_ROOT, /storage/emulated/0, /sdcard)"
     exit 1
   fi
