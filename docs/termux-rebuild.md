@@ -4,7 +4,11 @@ This workflow fully removes old `zeroclaw` and old OpenClaw runtime state, then 
 
 - Telegram enabled
 - default model set to `nvidia/z-ai/glm4.7`
-- fallback model `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
+- fallback models:
+  - `nvidia/zai-org/GLM-5`
+  - `nvidia/moonshotai/kimi-k2.5`
+  - `nvidia/openai/gpt-oss-120b`
+  - `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 
 ## 1) Clone repository on phone
 

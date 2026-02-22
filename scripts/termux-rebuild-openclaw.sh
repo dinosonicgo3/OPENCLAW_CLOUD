@@ -36,6 +36,7 @@ log "stopping old claw processes"
 pkill -9 -x zeroclaw >/dev/null 2>&1 || true
 pkill -9 -f "zeroclaw daemon" >/dev/null 2>&1 || true
 pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
+pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
 if [ "$SKIP_WATCHDOG" != "1" ]; then
   pkill -9 -f "termux-openclaw-watchdog.sh" >/dev/null 2>&1 || true
 fi
@@ -142,6 +143,30 @@ jq -n \
               maxTokens: 8192
             },
             {
+              id: "zai-org/GLM-5",
+              name: "GLM 5 (NVIDIA)",
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 131072,
+              maxTokens: 8192
+            },
+            {
+              id: "moonshotai/kimi-k2.5",
+              name: "Kimi K2.5 (NVIDIA)",
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 131072,
+              maxTokens: 8192
+            },
+            {
+              id: "openai/gpt-oss-120b",
+              name: "GPT-OSS 120B (NVIDIA)",
+              reasoning: false,
+              input: ["text"],
+              contextWindow: 131072,
+              maxTokens: 8192
+            },
+            {
               id: "nvidia/llama-3.1-nemotron-70b-instruct",
               name: "NVIDIA Llama 3.1 Nemotron 70B Instruct",
               reasoning: false,
@@ -157,7 +182,12 @@ jq -n \
       defaults: {
         model: {
           primary: "nvidia/z-ai/glm4.7",
-          fallbacks: ["nvidia/nvidia/llama-3.1-nemotron-70b-instruct"]
+          fallbacks: [
+            "nvidia/zai-org/GLM-5",
+            "nvidia/moonshotai/kimi-k2.5",
+            "nvidia/openai/gpt-oss-120b",
+            "nvidia/nvidia/llama-3.1-nemotron-70b-instruct"
+          ]
         }
       }
     },
@@ -178,7 +208,7 @@ cat >>"$HOME/.bashrc" <<'EOF'
 # --- OPENCLAW_TERMUX_RUNTIME_BEGIN ---
 export PATH="$HOME/.npm-global/bin:$PATH"
 export TMPDIR="$HOME/tmp"
-alias ocr='pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true; pkill -x openclaw >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true; tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"'
+alias ocr='pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true; pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true; pkill -x openclaw >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true; tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"'
 alias oclog='tmux attach -t openclaw'
 alias ockill='pkill -9 -f "openclaw" >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true'
 alias doglog='tmux attach -t openclaw-watchdog'
@@ -217,7 +247,7 @@ mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
 termux-wake-lock >/dev/null 2>&1 || true
 sleep 8
 if ! ss -ltn 2>/dev/null | grep -q ':18789 '; then
-  if ! pgrep -f "openclaw-gateway" >/dev/null 2>&1; then
+  if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1; then
     if ! tmux has-session -t openclaw 2>/dev/null; then
       tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"
     fi

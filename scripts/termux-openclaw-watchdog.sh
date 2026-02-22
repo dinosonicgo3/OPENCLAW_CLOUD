@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.1.0"
+WATCHDOG_VERSION="1.3.0"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
@@ -49,7 +49,8 @@ fi
 log() {
   local ts
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  printf '[%s] [%s] %s\n' "$ts" "$WATCHDOG_NAME" "$*" | tee -a "$LOG_FILE" >/dev/null
+  mkdir -p "$(dirname "$LOG_FILE")"
+  printf '[%s] [%s] %s\n' "$ts" "$WATCHDOG_NAME" "$*" >>"$LOG_FILE"
 }
 
 state_init() {
@@ -115,7 +116,9 @@ finish_maintenance() {
 }
 
 openclaw_healthy() {
-  pgrep -f "openclaw-gateway" >/dev/null 2>&1 || return 1
+  if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1; then
+    return 1
+  fi
   ss -ltn 2>/dev/null | grep -q ":${OPENCLAW_PORT} " || return 1
   return 0
 }
@@ -134,6 +137,7 @@ rollback_and_rebuild() {
   log "rescue start: reason=${reason}, target=${target}"
   send_telegram "🚨 Watchdog 救援啟動：${reason}\n目標版本：${target}"
 
+  pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
   pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
   pkill -9 -x openclaw >/dev/null 2>&1 || true
   tmux kill-session -t openclaw >/dev/null 2>&1 || true
@@ -152,7 +156,11 @@ rollback_and_rebuild() {
   NVIDIA_API_KEY="$NVIDIA_API_KEY" \
   OPENCLAW_PORT="$OPENCLAW_PORT" \
   OPENCLAW_REBUILD_SKIP_WATCHDOG=1 \
-  bash "$REPO_DIR/scripts/termux-rebuild-openclaw.sh" >>"$LOG_FILE" 2>&1
+  bash "$REPO_DIR/scripts/termux-rebuild-openclaw.sh" >>"$LOG_FILE" 2>&1 || {
+    log "rescue failed: rebuild script exited non-zero"
+    send_telegram "❌ Watchdog 救援失敗：重建腳本執行失敗（${target}）"
+    return 1
+  }
 
   sleep 8
   if openclaw_healthy; then

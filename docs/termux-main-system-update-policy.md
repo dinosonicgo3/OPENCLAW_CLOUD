@@ -68,7 +68,11 @@ jq -r '.agents.defaults.model.primary,.agents.defaults.model.fallbacks[0],.chann
 Expected values:
 
 - primary model: `nvidia/z-ai/glm4.7`
-- fallback model: `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
+- fallback models include:
+  - `nvidia/zai-org/GLM-5`
+  - `nvidia/moonshotai/kimi-k2.5`
+  - `nvidia/openai/gpt-oss-120b`
+  - `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - telegram enabled: `true`
 
 ### 5) Start runtime
