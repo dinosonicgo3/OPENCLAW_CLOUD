@@ -4,7 +4,6 @@ set -euo pipefail
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 CFG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME_DIR/.openclaw/openclaw.json}"
 LOG_FILE="${OPENCLAW_CORE_GUARD_LOG:-$HOME_DIR/openclaw-logs/core-guard.log}"
-POLICY_VERSION="v1.0.0"
 
 mkdir -p "$(dirname "$CFG_FILE")" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -59,9 +58,14 @@ is_safe() {
 }
 
 fix_config() {
-  local before after ts token fallback_port backup tmp
+  local before after token fallback_port backup tmp
+  if is_safe; then
+    log "config checked; no changes required"
+    printf 'unchanged\n'
+    return 0
+  fi
+
   before="$(json_sha)"
-  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   fallback_port="${OPENCLAW_PORT:-18789}"
   token="${OPENCLAW_GATEWAY_TOKEN:-}"
   if [ -z "$token" ] && [ -f "$CFG_FILE" ]; then
@@ -74,8 +78,6 @@ fix_config() {
   tmp="$(mktemp)"
   jq \
     --arg token "$token" \
-    --arg ts "$ts" \
-    --arg policyVersion "$POLICY_VERSION" \
     --argjson fallbackPort "$fallback_port" \
     '
       .gateway = (.gateway // {}) |
@@ -97,13 +99,7 @@ fix_config() {
         end
       else
         .
-      end |
-      .meta = (.meta // {}) |
-      .meta.termuxCorePolicy = {
-        id: "termux-openclaw-core-policy",
-        version: $policyVersion,
-        enforcedAtUtc: $ts
-      }
+      end
     ' "$CFG_FILE" >"$tmp"
   after="$(tmp_sha "$tmp")"
   if [ "$before" != "$after" ]; then
