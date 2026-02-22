@@ -45,6 +45,8 @@ oclog   # attach gateway logs
 ocr     # restart OpenClaw gateway in tmux
 ockill  # stop OpenClaw
 coreguard # enforce safe gateway auth config
+obsidian_status # show Obsidian integration status
+obsidian_link   # link OpenClaw workspace to Obsidian vault
 dogbaseline # refresh watchdog critical-file baseline
 ```
 
@@ -76,10 +78,27 @@ openclaw health
 
 Watchdog details:
 
-- `docs/platforms/termux-watchdog.md`
+- `docs/termux-watchdog.md`
 
-## 6) Main system update policy
+## 6) Obsidian integration
+
+If Obsidian Android app (`md.obsidian`) is installed, rebuild auto-links workspace into a shared vault.
+
+- Integration script: `scripts/termux-obsidian-integrate.sh`
+- Default vault path: `~/storage/shared/Documents/OpenClawVault`
+- Manual commands:
+
+```bash
+obsidian_status
+obsidian_link
+```
+
+Details:
+
+- `docs/termux-obsidian.md`
+
+## 7) Main system update policy
 
 Follow the maintenance policy after deployment:
 
-- `docs/platforms/termux-main-system-update-policy.md`
+- `docs/termux-main-system-update-policy.md`

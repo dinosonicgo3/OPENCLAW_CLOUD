@@ -102,6 +102,7 @@ OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(date +%s | sha256sum | cut -c1-24)}"
 OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$REPO_DIR}"
 CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
+OBSIDIAN_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-obsidian-integrate.sh"
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
   log "TELEGRAM_BOT_TOKEN is required"
@@ -221,6 +222,8 @@ export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW
 alias ocr='pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true; pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true; pkill -x openclaw >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true; tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"'
 alias oclog='tmux attach -t openclaw'
 alias ockill='pkill -9 -f "openclaw" >/dev/null 2>&1 || true; tmux kill-session -t openclaw >/dev/null 2>&1 || true'
+alias obsidian_status='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-obsidian-integrate.sh" --status'
+alias obsidian_link='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-obsidian-integrate.sh" --link'
 alias doglog='tmux attach -t openclaw-watchdog'
 alias dogstatus='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --status'
 alias dogbaseline='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --baseline-refresh'
@@ -277,6 +280,9 @@ chmod 700 "$HOME/.termux/boot/openclaw-launch.sh" "$HOME/.termux/boot/openclaw-w
 if [ -f "$CORE_GUARD_SCRIPT" ]; then
   chmod 700 "$CORE_GUARD_SCRIPT"
 fi
+if [ -f "$OBSIDIAN_SCRIPT" ]; then
+  chmod 700 "$OBSIDIAN_SCRIPT"
+fi
 
 if [ "$SKIP_WATCHDOG" != "1" ]; then
 log "writing watchdog env"
@@ -296,6 +302,11 @@ RESCUE_COOLDOWN_SECONDS="300"
 STARTUP_GRACE_SECONDS="300"
 EOF
 chmod 600 "$HOME/.openclaw-watchdog.env"
+fi
+
+if [ -x "$OBSIDIAN_SCRIPT" ] && pm list packages 2>/dev/null | grep -q '^package:md\.obsidian$'; then
+  log "obsidian detected; linking vault"
+  OPENCLAW_OBSIDIAN_RESTART=0 bash "$OBSIDIAN_SCRIPT" --link >>"$HOME/openclaw-logs/obsidian-integration.log" 2>&1 || true
 fi
 
 log "starting OpenClaw gateway in tmux"
