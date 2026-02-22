@@ -37,24 +37,30 @@ resolve_shared_root() {
 shared_candidates() {
   cat <<EOF
 $SHARED_ROOT
-/storage/emulated/0/Documents
 /storage/emulated/0/Android/data/com.termux/files
 /storage/emulated/0/Android/media/com.termux
+/storage/emulated/0/Documents
 /sdcard/Documents
 $HOME_DIR/storage
 EOF
 }
 
 resolve_writable_base() {
-  local candidate probe
+  local candidate probe file
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
     [ -d "$candidate" ] || continue
     probe="$candidate/.openclaw_probe_$$"
     if mkdir "$probe" >/dev/null 2>&1; then
+      file="$probe/rw-test.md"
+      if printf 'ok\n' >"$file" 2>/dev/null && cat "$file" >/dev/null 2>&1; then
+        rm -f "$file" >/dev/null 2>&1 || true
+        rmdir "$probe" >/dev/null 2>&1 || true
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+      rm -f "$file" >/dev/null 2>&1 || true
       rmdir "$probe" >/dev/null 2>&1 || true
-      printf '%s\n' "$candidate"
-      return 0
     fi
   done < <(shared_candidates)
   return 1
