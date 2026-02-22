@@ -2,11 +2,12 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.4.0"
+WATCHDOG_VERSION="1.5.0"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
 STATE_FILE="$STATE_DIR/state.json"
+MANIFEST_FILE="$STATE_DIR/critical-manifest.json"
 LOG_FILE="${OPENCLAW_WATCHDOG_LOG:-$HOME_DIR/openclaw-logs/watchdog.log}"
 ENV_FILE="${OPENCLAW_WATCHDOG_ENV:-$HOME_DIR/.openclaw-watchdog.env}"
 PID_FILE="$STATE_DIR/daemon.pid"
@@ -95,6 +96,63 @@ state_set() {
   mv "$tmp" "$STATE_FILE"
 }
 
+sha_path() {
+  local file="$1"
+  if [ ! -f "$file" ]; then
+    printf 'missing'
+    return 0
+  fi
+  sha256sum "$file" | awk '{print $1}'
+}
+
+critical_paths() {
+  cat <<EOF
+$REPO_DIR/scripts/termux-openclaw-core-guard.sh
+$REPO_DIR/scripts/termux-openclaw-watchdog.sh
+$REPO_DIR/scripts/termux-rebuild-openclaw.sh
+$OPENCLAW_BOOT_SCRIPT
+$HOME_DIR/.termux/boot/openclaw-watchdog-launch.sh
+$HOME_DIR/.termux/boot/start-openclaw.sh
+EOF
+}
+
+refresh_critical_manifest() {
+  local tmp tmp2 path sha now
+  tmp="$(mktemp)"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg now "$now" '{generated_at_utc:$now, entries:[]}' >"$tmp"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    sha="$(sha_path "$path")"
+    tmp2="$(mktemp)"
+    jq --arg p "$path" --arg s "$sha" '.entries += [{"path":$p,"sha256":$s}]' "$tmp" >"$tmp2"
+    mv "$tmp2" "$tmp"
+  done < <(critical_paths)
+  mv "$tmp" "$MANIFEST_FILE"
+  chmod 600 "$MANIFEST_FILE"
+  log "critical manifest refreshed: $MANIFEST_FILE"
+}
+
+critical_drift_detected() {
+  local line path expected actual
+  if [ ! -f "$MANIFEST_FILE" ]; then
+    refresh_critical_manifest
+    return 1
+  fi
+
+  while IFS=$'\t' read -r path expected; do
+    [ -n "${path:-}" ] || continue
+    actual="$(sha_path "$path")"
+    if [ "$actual" != "$expected" ]; then
+      log "critical drift: path=$path expected=$expected actual=$actual"
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done < <(jq -r '.entries[]? | [.path, .sha256] | @tsv' "$MANIFEST_FILE" 2>/dev/null || true)
+
+  return 1
+}
+
 send_telegram() {
   local msg="$1"
   if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_OWNER_ID" ]; then
@@ -161,6 +219,20 @@ enter_maintenance() {
 
 finish_maintenance() {
   local reason="${1:-manual}"
+  local guard_result
+  guard_result="$(run_core_guard 2>/dev/null || true)"
+  if [ "$guard_result" = "changed" ]; then
+    log "maintenance finish: config healed, restarting openclaw before ack"
+    restart_openclaw_after_guard || true
+  fi
+  if ! openclaw_healthy; then
+    log "maintenance finish rejected: openclaw unhealthy"
+    send_telegram "❌ Watchdog: 更新成功握手被拒絕，OpenClaw 健康檢查未通過，啟動救援回滾。"
+    state_set '.maintenance.active=false | .maintenance.reason="" | .maintenance.started_at=0 | .maintenance.deadline_at=0'
+    trigger_rescue "maintenance-finish-unhealthy"
+    return 1
+  fi
+  refresh_critical_manifest
   state_set '.maintenance.active=false | .maintenance.reason="" | .maintenance.started_at=0 | .maintenance.deadline_at=0'
   log "maintenance finished: ${reason}"
   send_telegram "✅ Watchdog: 收到更新成功握手（${reason}），恢復正常監控。"
@@ -216,6 +288,7 @@ rollback_and_rebuild() {
 
   sleep 8
   if openclaw_healthy; then
+    refresh_critical_manifest || true
     log "rescue success: ${target}"
     send_telegram "✅ Watchdog 救援成功：已回滾並重建到 ${target}"
     return 0
@@ -316,7 +389,7 @@ poll_telegram_updates() {
 }
 
 monitor_once() {
-  local now active deadline last_monitor guard_result
+  local now active deadline last_monitor guard_result drift_path
   now="$(date +%s)"
   poll_telegram_updates
 
@@ -330,6 +403,13 @@ monitor_once() {
       state_set '.maintenance.active=false | .maintenance.reason="" | .maintenance.started_at=0 | .maintenance.deadline_at=0'
       trigger_rescue "maintenance-timeout"
     fi
+    return 0
+  fi
+
+  drift_path="$(critical_drift_detected 2>/dev/null || true)"
+  if [ -n "$drift_path" ]; then
+    send_telegram "🚨 Watchdog: 偵測到底層檔案漂移（${drift_path}），啟動救援回滾。"
+    trigger_rescue "critical-drift"
     return 0
   fi
 
@@ -381,6 +461,7 @@ run_daemon() {
   if [ "$guard_result" = "changed" ]; then
     send_telegram "🩹 Watchdog: 開機時修復了 OpenClaw 危險配置。"
   fi
+  refresh_critical_manifest || true
   poll_mode="disabled"
   case "$(printf '%s' "$WATCHDOG_TELEGRAM_POLL_ENABLED" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on) poll_mode="enabled" ;;
@@ -404,6 +485,7 @@ Usage:
   termux-openclaw-watchdog.sh --daemon
   termux-openclaw-watchdog.sh --once
   termux-openclaw-watchdog.sh --status
+  termux-openclaw-watchdog.sh --baseline-refresh
   termux-openclaw-watchdog.sh --rescue <reason>
   termux-openclaw-watchdog.sh --maintenance-start <reason>
   termux-openclaw-watchdog.sh --maintenance-ok <reason>
@@ -420,6 +502,9 @@ case "${1:---daemon}" in
     ;;
   --status)
     print_status
+    ;;
+  --baseline-refresh)
+    refresh_critical_manifest
     ;;
   --rescue)
     state_init

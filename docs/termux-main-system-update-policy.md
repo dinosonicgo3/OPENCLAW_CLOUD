@@ -120,6 +120,7 @@ tmux send-keys -t openclaw 'export PATH="$HOME/.npm-global/bin:/data/data/com.te
 - Keep Termux:Boot (`com.termux.boot`) installed so OpenClaw can auto-start after reboot.
 - Keep watchdog running (`tmux` session: `openclaw-watchdog`) with valid `~/.openclaw-watchdog.env`.
 - Use local handshake by default: `dogmaint_start` before update, `dogmaint_ok` after update.
+- If update changed any low-level script, run `dogbaseline` after confirming service health.
 - Only use Telegram handshake commands when watchdog has a dedicated bot token (`WATCHDOG_TELEGRAM_POLL_ENABLED=1` + `WATCHDOG_TELEGRAM_BOT_TOKEN`).
 - Run `coreguard` before and after update window; fix any unsafe drift immediately.
 - Never set `gateway.auth.mode=none` when `gateway.bind=lan`.

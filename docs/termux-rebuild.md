@@ -45,6 +45,7 @@ oclog   # attach gateway logs
 ocr     # restart OpenClaw gateway in tmux
 ockill  # stop OpenClaw
 coreguard # enforce safe gateway auth config
+dogbaseline # refresh watchdog critical-file baseline
 ```
 
 ## 5) Boot auto-start

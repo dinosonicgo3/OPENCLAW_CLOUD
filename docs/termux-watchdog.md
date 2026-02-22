@@ -7,6 +7,7 @@ This watchdog runs independently from OpenClaw and is started with phone boot.
 - Optional Telegram command polling every 3 minutes (disabled by default to avoid bot conflicts with main OpenClaw service).
 - Runs OpenClaw health checks every 30 minutes.
 - Runs `termux-openclaw-core-guard.sh --fix` before health checks to auto-heal dangerous gateway auth drift.
+- Tracks hash baseline for critical low-level files. If drift is detected outside maintenance handshake, watchdog auto-rolls back.
 - Auto-rolls back to latest git tag matching `穩定版*` when rescue is needed.
 - Sends rescue and status messages back to Telegram owner.
 
@@ -53,7 +54,9 @@ WATCHDOG_TELEGRAM_BOT_TOKEN="<dedicated_watchdog_bot_token>"
 2. Watchdog enters maintenance mode for 30 minutes.
 3. During maintenance, OpenClaw disconnection is treated as expected.
 4. After update completes, run `dogmaint_ok` (or send `更新成功` only when dedicated watchdog bot polling is enabled).
-5. If maintenance success is not received within 30 minutes, watchdog triggers rescue rollback automatically.
+5. `dogmaint_ok` now includes a health gate: OpenClaw must be healthy, otherwise watchdog rejects success and triggers rescue rollback.
+6. On successful maintenance finish, watchdog refreshes the critical hash baseline.
+7. If maintenance success is not received within 30 minutes, watchdog triggers rescue rollback automatically.
 
 ## Runtime files
 
@@ -71,6 +74,7 @@ WATCHDOG_TELEGRAM_BOT_TOKEN="<dedicated_watchdog_bot_token>"
 ```bash
 doglog         # attach watchdog tmux session
 dogstatus      # print watchdog state json
+dogbaseline    # refresh critical file hash baseline
 dogrescue      # force rescue rollback now
 dogmaint_start # manual maintenance-start handshake
 dogmaint_ok    # manual maintenance-success handshake
