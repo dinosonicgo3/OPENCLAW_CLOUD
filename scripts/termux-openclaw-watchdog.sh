@@ -262,8 +262,36 @@ ensure_local_memory_config() {
   return 1
 }
 
+ensure_gateway_controlui_config() {
+  local cfg tmp
+  cfg="$HOME_DIR/.openclaw/openclaw.json"
+  [ -f "$cfg" ] || return 1
+  tmp="$(mktemp)"
+  if ! jq '
+    .gateway = (.gateway // {}) |
+    if ((.gateway.bind // "lan") == "lan") then
+      .gateway.controlUi = (.gateway.controlUi // {}) |
+      .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
+    else
+      .
+    end
+  ' "$cfg" >"$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! cmp -s "$cfg" "$tmp"; then
+    cp -f "$cfg" "$cfg.bak.selfcheck.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    mv "$tmp" "$cfg"
+    chmod 600 "$cfg" >/dev/null 2>&1 || true
+    log "selfcheck auto-fixed gateway.controlUi for lan bind"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 run_full_selfcheck() {
-  local now notify_mode cfg cfg_port env_port provider_cfg workspace_path mem_files cfg_embed_model cfg_embed_cache
+  local now notify_mode cfg cfg_port cfg_bind env_port provider_cfg workspace_path mem_files cfg_embed_model cfg_embed_cache cfg_controlui_fallback
   local mem_status_json mem_indexed mem_scanned mem_provider_runtime mem_model_runtime issues_text
   local last_alert_sig last_alert_ts sig should_notify summary
   local -a issues
@@ -278,13 +306,21 @@ run_full_selfcheck() {
       issues+=("已自動修正 memorySearch 為 local/no-remote。")
     fi
   fi
+  if ensure_gateway_controlui_config; then
+    issues+=("已自動修正 gateway.controlUi（lan bind 啟動保護）。")
+  fi
 
   if [ ! -f "$cfg" ]; then
     issues+=("缺少主配置檔：$cfg")
   else
     cfg_port="$(jq -r '.gateway.port // empty' "$cfg" 2>/dev/null || true)"
+    cfg_bind="$(jq -r '.gateway.bind // "lan"' "$cfg" 2>/dev/null || echo lan)"
     if [ -n "$cfg_port" ] && [ -n "$env_port" ] && [ "$cfg_port" != "$env_port" ]; then
       issues+=("OpenClaw/Watchdog port 不一致（config=${cfg_port}, watchdog=${env_port}）。")
+    fi
+    cfg_controlui_fallback="$(jq -r '.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback // "unset"' "$cfg" 2>/dev/null || echo unset)"
+    if [ "$cfg_bind" = "lan" ] && [ "$cfg_controlui_fallback" != "true" ]; then
+      issues+=("gateway.controlUi 保護缺失（bind=lan 時需 fallback=true）。")
     fi
 
     provider_cfg="$(jq -r '.agents.defaults.memorySearch.provider // "unset"' "$cfg" 2>/dev/null || echo unset)"

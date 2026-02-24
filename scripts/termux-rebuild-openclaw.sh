@@ -193,7 +193,10 @@ jq -n \
       mode: "local",
       bind: "lan",
       port: $gatewayPort,
-      auth: { mode: "token", token: $gatewayToken }
+      auth: { mode: "token", token: $gatewayToken },
+      controlUi: {
+        dangerouslyAllowHostHeaderOriginFallback: true
+      }
     },
     models: {
       providers: {
@@ -287,6 +290,8 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
       | .gateway.bind = (.gateway.bind // "lan")
       | .gateway.port = $gatewayPort
       | .gateway.auth = (.gateway.auth // {})
+      | .gateway.controlUi = (.gateway.controlUi // {})
+      | .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
       | if ((.gateway.auth.mode // "none") == "none") or ((.gateway.auth.mode // "") == "") then
           .gateway.auth.mode = "token" | .gateway.auth.token = $gatewayToken
         elif (.gateway.auth.mode == "token") and ((.gateway.auth.token // "") == "") then

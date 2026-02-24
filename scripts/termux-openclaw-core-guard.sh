@@ -45,13 +45,17 @@ is_safe() {
     | (.gateway // {} | .auth // {} | .mode // "none") as $mode
     | (.gateway // {} | .auth // {} | .token // "") as $token
     | (.gateway // {} | .auth // {} | .password // "") as $password
+    | (.gateway // {} | .controlUi // {} | .dangerouslyAllowHostHeaderOriginFallback // false) as $uiFallback
     | (.gateway // {} | .port) as $port
     | (($port | tonumber?) != null)
     and (
       ($bind != "lan")
       or (
-        ($mode == "token" and ($token | length) > 0)
-        or ($mode == "password" and ($password | length) > 0)
+        ($uiFallback == true)
+        and (
+          ($mode == "token" and ($token | length) > 0)
+          or ($mode == "password" and ($password | length) > 0)
+        )
       )
     )
   ' "$CFG_FILE" >/dev/null 2>&1
@@ -85,7 +89,9 @@ fix_config() {
       .gateway.bind = (.gateway.bind // "lan") |
       .gateway.port = ((.gateway.port | tonumber?) // $fallbackPort) |
       .gateway.auth = (.gateway.auth // {}) |
+      .gateway.controlUi = (.gateway.controlUi // {}) |
       if .gateway.bind == "lan" then
+        .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true |
         if ((.gateway.auth.mode // "none") == "none") or ((.gateway.auth.mode // "") == "") then
           .gateway.auth.mode = "token" |
           .gateway.auth.token = $token
