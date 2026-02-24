@@ -234,15 +234,18 @@ ensure_local_memory_config() {
   cfg="$HOME_DIR/.openclaw/openclaw.json"
   [ -f "$cfg" ] || return 1
   tmp="$(mktemp)"
-  if ! jq '
+  if ! jq \
+    --arg embeddingModel "$OPENCLAW_MEMORY_EMBEDDING_MODEL" \
+    --arg embeddingCacheDir "$OPENCLAW_MEMORY_MODEL_CACHE_DIR" \
+    '
     .agents = (.agents // {}) |
     .agents.defaults = (.agents.defaults // {}) |
     .agents.defaults.memorySearch = (.agents.defaults.memorySearch // {}) |
     .agents.defaults.memorySearch.provider = "local" |
     .agents.defaults.memorySearch.fallback = "none" |
     .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {}) |
-    .agents.defaults.memorySearch.local.modelPath = env.OPENCLAW_MEMORY_EMBEDDING_MODEL |
-    .agents.defaults.memorySearch.local.modelCacheDir = env.OPENCLAW_MEMORY_MODEL_CACHE_DIR |
+    .agents.defaults.memorySearch.local.modelPath = $embeddingModel |
+    .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir |
     del(.agents.defaults.memorySearch.remote)
   ' "$cfg" >"$tmp"; then
     rm -f "$tmp"
