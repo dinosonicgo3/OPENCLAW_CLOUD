@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.7.1"
+WATCHDOG_VERSION="1.7.2"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
@@ -34,6 +34,7 @@ MODEL_POLICY_RESTART_ON_CHANGE="${MODEL_POLICY_RESTART_ON_CHANGE:-0}"
 DRIFT_AUTO_BASELINE_IF_HEALTHY="${DRIFT_AUTO_BASELINE_IF_HEALTHY:-1}"
 SELFCHECK_INTERVAL_SECONDS="${SELFCHECK_INTERVAL_SECONDS:-1800}"
 SELFCHECK_ALERT_COOLDOWN_SECONDS="${SELFCHECK_ALERT_COOLDOWN_SECONDS:-3600}"
+SELFCHECK_MEMORY_INDEX_GRACE_SECONDS="${SELFCHECK_MEMORY_INDEX_GRACE_SECONDS:-21600}"
 SELF_CHECK_ENFORCE_LOCAL_MEMORY="${SELF_CHECK_ENFORCE_LOCAL_MEMORY:-1}"
 OPENCLAW_MEMORY_EMBEDDING_MODEL="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
 OPENCLAW_MEMORY_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
@@ -290,9 +291,14 @@ ensure_gateway_controlui_config() {
   return 1
 }
 
+memory_index_warmup_active() {
+  pgrep -f "openclaw-memory|openclaw memory index|cmake-js compile|node-llama-cpp|embeddinggemma" >/dev/null 2>&1
+}
+
 run_full_selfcheck() {
   local now notify_mode cfg cfg_port cfg_bind env_port provider_cfg workspace_path mem_files cfg_embed_model cfg_embed_cache cfg_controlui_fallback
   local mem_status_json mem_indexed mem_scanned mem_provider_runtime mem_model_runtime issues_text
+  local started_at startup_age warmup_active
   local last_alert_sig last_alert_ts sig should_notify summary
   local -a issues
   issues=()
@@ -368,6 +374,19 @@ run_full_selfcheck() {
     fi
   done
 
+  started_at="$(state_get '.started_at // 0')"
+  if ! printf '%s' "$started_at" | grep -Eq '^[0-9]+$'; then
+    started_at=0
+  fi
+  startup_age=0
+  if [ "$started_at" -gt 0 ] && [ "$now" -ge "$started_at" ]; then
+    startup_age="$((now - started_at))"
+  fi
+  warmup_active=0
+  if memory_index_warmup_active; then
+    warmup_active=1
+  fi
+
   mem_status_json=""
   if command -v timeout >/dev/null 2>&1; then
     mem_status_json="$(timeout 25 openclaw memory status --json 2>/dev/null || true)"
@@ -385,13 +404,23 @@ run_full_selfcheck() {
       issues+=("記憶運行模型不符（runtime=${mem_model_runtime}, expected=${OPENCLAW_MEMORY_EMBEDDING_MODEL}）。")
     fi
     if [ "$mem_scanned" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
-      issues+=("記憶索引異常：indexed=${mem_indexed}/${mem_scanned}（provider=${mem_provider_runtime}）。")
-    fi
-    if [ "${mem_files:-0}" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
-      issues+=("記憶檔存在(${mem_files})但索引為 0，memory_search 會回空。")
+      if [ "$warmup_active" -eq 1 ]; then
+        log "memory index warmup in progress; suppressing indexed=0 alert"
+      elif [ "$startup_age" -lt "$SELFCHECK_MEMORY_INDEX_GRACE_SECONDS" ]; then
+        log "memory index grace window active (${startup_age}s < ${SELFCHECK_MEMORY_INDEX_GRACE_SECONDS}s); suppressing indexed=0 alert"
+      else
+        issues+=("記憶索引異常：indexed=${mem_indexed}/${mem_scanned}（provider=${mem_provider_runtime}）。")
+        if [ "${mem_files:-0}" -gt 0 ]; then
+          issues+=("記憶檔存在(${mem_files})但索引為 0，memory_search 會回空。")
+        fi
+      fi
     fi
   else
-    issues+=("無法取得 memory status（openclaw memory status --json）。")
+    if [ "$warmup_active" -eq 1 ]; then
+      log "memory status unavailable during warmup; suppressing alert"
+    else
+      issues+=("無法取得 memory status（openclaw memory status --json）。")
+    fi
   fi
 
   if [ "${#issues[@]}" -gt 0 ]; then
