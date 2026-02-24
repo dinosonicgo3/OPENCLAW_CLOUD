@@ -16,6 +16,7 @@ ENABLE_AUTO_UPDATE="${ENABLE_AUTO_UPDATE:-1}"
 CHANNEL_TARGET="${CHANNEL_TARGET:-stable}"
 STATE_FILE="${HOME_DIR}/.openclaw-watchdog/state.json"
 FORCE_NPM_UPDATE="${FORCE_NPM_UPDATE:-0}"
+OPENCLAW_NPM_TARGET="${OPENCLAW_NPM_TARGET:-latest}"
 
 export PATH="${NPM_PREFIX_DIR}/bin:/data/data/com.termux/files/usr/bin:$PATH"
 mkdir -p "$LOG_DIR" "$TMP_DIR" "${HOME_DIR}/backups" "${HOME_DIR}/.openclaw"
@@ -191,7 +192,7 @@ log "checking status before update"
 openclaw update status --json >"${TMP_DIR}/openclaw-update-status-before.json" 2>&1 || true
 before_version="$(current_openclaw_version)"
 latest_version="$(detect_latest_version)"
-log "version before=${before_version:-unknown}, npm_latest=${latest_version:-unknown}"
+log "version before=${before_version:-unknown}, npm_latest=${latest_version:-unknown}, npm_target=${OPENCLAW_NPM_TARGET}"
 
 log "running openclaw update"
 if openclaw update --yes --json >"${TMP_DIR}/openclaw-update-result.json" 2>&1; then
@@ -208,12 +209,18 @@ if bool_true "$FORCE_NPM_UPDATE"; then
   needs_npm_fallback=1
 elif [ "$cli_update_rc" -ne 0 ]; then
   needs_npm_fallback=1
+elif [ "$OPENCLAW_NPM_TARGET" != "latest" ] && [ "$after_version" != "$OPENCLAW_NPM_TARGET" ]; then
+  needs_npm_fallback=1
 elif [ -n "$latest_version" ] && [ "$after_version" != "$latest_version" ]; then
   needs_npm_fallback=1
 fi
 
 if [ "$needs_npm_fallback" -eq 1 ]; then
-  local_target="${latest_version:-latest}"
+  if [ "$OPENCLAW_NPM_TARGET" = "latest" ]; then
+    local_target="${latest_version:-latest}"
+  else
+    local_target="$OPENCLAW_NPM_TARGET"
+  fi
   log "running termux npm fallback update (target=${local_target}, ignore-scripts=1)"
   # Termux often fails native postinstall (e.g. koffi/renameat2). ignore-scripts is safer here.
   if ! npm install -g "openclaw@${local_target}" \
