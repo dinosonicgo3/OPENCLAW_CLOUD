@@ -5,7 +5,6 @@ This workflow fully removes old `zeroclaw` and old OpenClaw runtime state, then 
 - Telegram enabled
 - default model set to `nvidia/z-ai/glm4.7`
 - fallback models:
-  - `nvidia/zai-org/GLM-5`
   - `nvidia/moonshotai/kimi-k2.5`
   - `nvidia/openai/gpt-oss-120b`
   - `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
@@ -45,6 +44,8 @@ oclog   # attach gateway logs
 ocr     # restart OpenClaw gateway in tmux
 ockill  # stop OpenClaw
 coreguard # enforce safe gateway auth config
+ocupdate # run canonical Termux-safe OpenClaw update flow
+ocupdate_force # force npm fallback update path
 obsidian_status # show Obsidian integration status
 obsidian_link   # link OpenClaw workspace to Obsidian vault
 dogbaseline # refresh watchdog critical-file baseline
@@ -102,3 +103,4 @@ Details:
 Follow the maintenance policy after deployment:
 
 - `docs/termux-main-system-update-policy.md`
+- `docs/termux-openclaw-update.md`

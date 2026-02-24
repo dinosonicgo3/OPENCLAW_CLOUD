@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.5.0"
+WATCHDOG_VERSION="1.6.1"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
@@ -21,9 +21,17 @@ OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-$HOME_DIR/.termux/boot/openclaw-la
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-180}"
 MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-1800}"
 MAINTENANCE_TIMEOUT_SECONDS="${MAINTENANCE_TIMEOUT_SECONDS:-1800}"
+MAINTENANCE_AUTO_CLOSE_IF_HEALTHY="${MAINTENANCE_AUTO_CLOSE_IF_HEALTHY:-1}"
+MAINTENANCE_AUTO_CLOSE_MIN_SECONDS="${MAINTENANCE_AUTO_CLOSE_MIN_SECONDS:-120}"
 RESCUE_COOLDOWN_SECONDS="${RESCUE_COOLDOWN_SECONDS:-300}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-45}"
 STARTUP_GRACE_SECONDS="${STARTUP_GRACE_SECONDS:-300}"
+HEALTHCHECK_FAIL_THRESHOLD="${HEALTHCHECK_FAIL_THRESHOLD:-2}"
+MODEL_COOLDOWN_SECONDS="${MODEL_COOLDOWN_SECONDS:-86400}"
+MODEL_COOLDOWN_SOFT_THRESHOLD="${MODEL_COOLDOWN_SOFT_THRESHOLD:-3}"
+MODEL_SCAN_FILE_COUNT="${MODEL_SCAN_FILE_COUNT:-30}"
+MODEL_POLICY_RESTART_ON_CHANGE="${MODEL_POLICY_RESTART_ON_CHANGE:-0}"
+DRIFT_AUTO_BASELINE_IF_HEALTHY="${DRIFT_AUTO_BASELINE_IF_HEALTHY:-1}"
 
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -71,16 +79,25 @@ state_init() {
   "last_monitor_ts": 0,
   "last_rescue_ts": 0,
   "last_rescue_reason": "",
+  "consecutive_health_failures": 0,
   "started_at": 0,
   "maintenance": {
     "active": false,
     "reason": "",
     "started_at": 0,
     "deadline_at": 0
+  },
+  "model_guard": {
+    "last_scan_ts": 0,
+    "last_model_event_ts": "",
+    "last_model_ref": "",
+    "blocked_until": {},
+    "blocked_reason": {}
   }
 }
 EOF
   fi
+  state_migrate
 }
 
 state_get() {
@@ -93,6 +110,31 @@ state_set() {
   local tmp
   tmp="$(mktemp)"
   jq "$jq_expr" "$STATE_FILE" >"$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+state_migrate() {
+  local tmp
+  tmp="$(mktemp)"
+  jq '
+    .last_update_id = (.last_update_id // 0) |
+    .last_monitor_ts = (.last_monitor_ts // 0) |
+    .last_rescue_ts = (.last_rescue_ts // 0) |
+    .last_rescue_reason = (.last_rescue_reason // "") |
+    .consecutive_health_failures = (.consecutive_health_failures // 0) |
+    .started_at = (.started_at // 0) |
+    .maintenance = (.maintenance // {}) |
+    .maintenance.active = (.maintenance.active // false) |
+    .maintenance.reason = (.maintenance.reason // "") |
+    .maintenance.started_at = (.maintenance.started_at // 0) |
+    .maintenance.deadline_at = (.maintenance.deadline_at // 0) |
+    .model_guard = (.model_guard // {}) |
+    .model_guard.last_scan_ts = (.model_guard.last_scan_ts // 0) |
+    .model_guard.last_model_event_ts = (.model_guard.last_model_event_ts // "") |
+    .model_guard.last_model_ref = (.model_guard.last_model_ref // "") |
+    .model_guard.blocked_until = (.model_guard.blocked_until // {}) |
+    .model_guard.blocked_reason = (.model_guard.blocked_reason // {})
+  ' "$STATE_FILE" >"$tmp"
   mv "$tmp" "$STATE_FILE"
 }
 
@@ -110,6 +152,7 @@ critical_paths() {
 $REPO_DIR/scripts/termux-openclaw-core-guard.sh
 $REPO_DIR/scripts/termux-openclaw-watchdog.sh
 $REPO_DIR/scripts/termux-rebuild-openclaw.sh
+$REPO_DIR/scripts/termux-main-system-update.sh
 $OPENCLAW_BOOT_SCRIPT
 $HOME_DIR/.termux/boot/openclaw-watchdog-launch.sh
 $HOME_DIR/.termux/boot/start-openclaw.sh
@@ -163,6 +206,274 @@ send_telegram() {
     -d "chat_id=${TELEGRAM_OWNER_ID}" \
     --data-urlencode "text=${msg}" \
     -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
+}
+
+is_true_flag() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+disallowed_model_ref() {
+  local ref normalized
+  ref="${1:-}"
+  normalized="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    */zai-org/glm-5|*/z-ai/glm5|zai/glm-5|zai/glm5)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+drift_auto_heal_allowed_path() {
+  local path
+  path="${1:-}"
+  case "$path" in
+    "$REPO_DIR/scripts/termux-openclaw-watchdog.sh"|\
+    "$REPO_DIR/scripts/termux-rebuild-openclaw.sh"|\
+    "$REPO_DIR/scripts/termux-main-system-update.sh"|\
+    "$REPO_DIR/scripts/termux-openclaw-core-guard.sh")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+model_error_hard_unusable() {
+  local err
+  err="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$err" == *"prompt tokens limit exceeded"* ]] && return 0
+  [[ "$err" == *"creditserror"* ]] && return 0
+  [[ "$err" == *"no payment method"* ]] && return 0
+  [[ "$err" == *"does not yet include access"* ]] && return 0
+  [[ "$err" == *"cannot read properties of undefined (reading 'prompt_tokens')"* ]] && return 0
+  [[ "$err" == *"model not found"* ]] && return 0
+  [[ "$err" == *"unsupported model"* ]] && return 0
+  return 1
+}
+
+model_error_soft_unusable() {
+  local err
+  err="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$err" == *"too many requests"* ]] && return 0
+  [[ "$err" == *"error decoding response body"* ]] && return 0
+  [[ "$err" == *"request was aborted"* ]] && return 0
+  [[ "$err" == *"llm request timed out"* ]] && return 0
+  [[ "$err" == *"timed out"* ]] && return 0
+  return 1
+}
+
+block_model_for_cooldown() {
+  local ref reason now expiry current tmp msg
+  ref="${1:-}"
+  reason="${2:-unknown}"
+  [ -n "$ref" ] || return 0
+  now="$(date +%s)"
+  expiry="$((now + MODEL_COOLDOWN_SECONDS))"
+  current="$(jq -r --arg ref "$ref" '.model_guard.blocked_until[$ref] // 0' "$STATE_FILE" 2>/dev/null || echo 0)"
+  if [ "${current:-0}" -ge "$expiry" ]; then
+    return 0
+  fi
+  tmp="$(mktemp)"
+  jq --arg ref "$ref" --arg reason "$reason" --argjson expiry "$expiry" \
+    '.model_guard.blocked_until[$ref] = $expiry | .model_guard.blocked_reason[$ref] = $reason' \
+    "$STATE_FILE" >"$tmp"
+  mv "$tmp" "$STATE_FILE"
+  log "model cooldown set: ref=${ref}, until=${expiry}, reason=${reason}"
+  msg="⛔ 模型暫停使用：${ref}
+原因：${reason}
+已標記 24 小時內不再調用此平台模型。"
+  send_telegram "$msg"
+}
+
+prune_expired_model_cooldowns() {
+  local now tmp
+  now="$(date +%s)"
+  tmp="$(mktemp)"
+  jq --argjson now "$now" '
+    (.model_guard.blocked_until // {}) as $blocked |
+    .model_guard.blocked_until = ($blocked | with_entries(select(.value > $now))) |
+    (.model_guard.blocked_until // {}) as $active |
+    .model_guard.blocked_reason = ((.model_guard.blocked_reason // {}) | with_entries(select(.key as $k | ($active[$k] // 0) > $now)))
+  ' "$STATE_FILE" >"$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+scan_model_failures() {
+  local session_dir files last_scan now f
+  session_dir="$HOME_DIR/.openclaw/agents/main/sessions"
+  [ -d "$session_dir" ] || return 0
+  last_scan="$(state_get '.model_guard.last_scan_ts // 0')"
+  now="$(date +%s)"
+  files="$(ls -1t "$session_dir"/*.jsonl 2>/dev/null | head -n "$MODEL_SCAN_FILE_COUNT" || true)"
+  [ -n "$files" ] || {
+    state_set ".model_guard.last_scan_ts=${now}"
+    return 0
+  }
+
+  declare -A soft_count
+  declare -A soft_reason
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    while IFS=$'\t' read -r epoch provider model err; do
+      local ref err_clean threshold
+      [ -n "${epoch:-}" ] || continue
+      [ "${epoch:-0}" -gt "${last_scan:-0}" ] || continue
+      [ -n "${provider:-}" ] || continue
+      [ -n "${model:-}" ] || continue
+      if [ "${model#${provider}/}" != "$model" ]; then
+        ref="$model"
+      else
+        ref="${provider}/${model}"
+      fi
+      err_clean="$(printf '%s' "${err:-unknown}" | tr '\n' ' ' | tr -s ' ')"
+      if model_error_hard_unusable "$err_clean"; then
+        block_model_for_cooldown "$ref" "$err_clean"
+        continue
+      fi
+      if model_error_soft_unusable "$err_clean"; then
+        soft_count["$ref"]="$(( ${soft_count["$ref"]:-0} + 1 ))"
+        soft_reason["$ref"]="$err_clean"
+      fi
+    done < <(
+      jq -r '
+        if .type=="message" and .message.role=="assistant" and ((.message.stopReason=="error") or (.message.stopReason=="aborted")) then
+          [(.timestamp|fromdateiso8601? // 0), (.message.provider // ""), (.message.model // ""), (.message.errorMessage // .message.stopReason // "error")] | @tsv
+        elif .type=="custom" and .customType=="openclaw:prompt-error" then
+          [((.data.timestamp // 0) / 1000 | floor), (.data.provider // ""), (.data.model // ""), (.data.error // "error")] | @tsv
+        else
+          empty
+        end
+      ' "$f" 2>/dev/null || true
+    )
+  done <<< "$files"
+
+  threshold="${MODEL_COOLDOWN_SOFT_THRESHOLD:-3}"
+  for ref in "${!soft_count[@]}"; do
+    if [ "${soft_count[$ref]:-0}" -ge "$threshold" ]; then
+      block_model_for_cooldown "$ref" "${soft_reason[$ref]}"
+    fi
+  done
+  state_set ".model_guard.last_scan_ts=${now}"
+}
+
+apply_model_policy() {
+  local cfg now before_primary before_fallbacks after_primary after_fallbacks tmp msg
+  cfg="$HOME_DIR/.openclaw/openclaw.json"
+  [ -f "$cfg" ] || return 0
+  now="$(date +%s)"
+  prune_expired_model_cooldowns
+
+  before_primary="$(jq -r '.agents.defaults.model.primary // empty' "$cfg" 2>/dev/null || true)"
+  before_fallbacks="$(jq -r '(.agents.defaults.model.fallbacks // []) | join(",")' "$cfg" 2>/dev/null || true)"
+
+  tmp="$(mktemp)"
+  jq --argjson now "$now" --slurpfile st "$STATE_FILE" '
+    .agents = (.agents // {}) |
+    .agents.defaults = (.agents.defaults // {}) |
+    .agents.defaults.model = (.agents.defaults.model // {}) |
+    ($st[0].model_guard.blocked_until // {}) as $blocked |
+    def blocked($r): (($blocked[$r] // 0) > $now);
+    def disallowed($r): (($r | ascii_downcase) | test("(^|.*/)(zai-org/glm-5|z-ai/glm5)$"));
+    (.agents.defaults.model.primary // "") as $primary |
+    (.agents.defaults.model.fallbacks // []) as $fallbacks |
+    ($fallbacks | map(select((blocked(.) | not) and (disallowed(.) | not))) | unique) as $allowedFallbacks |
+    if ($primary | length) == 0 then
+      .agents.defaults.model.fallbacks = $allowedFallbacks
+    elif blocked($primary) or disallowed($primary) then
+      if ($allowedFallbacks | length) > 0 then
+        .agents.defaults.model.primary = $allowedFallbacks[0] |
+        .agents.defaults.model.fallbacks = ($allowedFallbacks | .[1:])
+      else
+        .agents.defaults.model.fallbacks = []
+      end
+    else
+      .agents.defaults.model.fallbacks = $allowedFallbacks
+    end
+  ' "$cfg" >"$tmp"
+
+  if ! cmp -s "$cfg" "$tmp"; then
+    mv "$tmp" "$cfg"
+    after_primary="$(jq -r '.agents.defaults.model.primary // empty' "$cfg" 2>/dev/null || true)"
+    after_fallbacks="$(jq -r '(.agents.defaults.model.fallbacks // []) | join(",")' "$cfg" 2>/dev/null || true)"
+    msg="🛠️ Watchdog: 模型路由策略已更新
+primary: ${before_primary} -> ${after_primary}
+fallbacks: ${before_fallbacks}
+=> ${after_fallbacks}"
+    log "model policy updated: primary ${before_primary} -> ${after_primary}"
+    send_telegram "$msg"
+    if is_true_flag "$MODEL_POLICY_RESTART_ON_CHANGE"; then
+      if restart_openclaw_after_guard; then
+        send_telegram "✅ Watchdog: 已重啟 OpenClaw 套用新的模型策略。"
+      else
+        send_telegram "⚠️ Watchdog: 模型策略已更新，但重啟 OpenClaw 失敗，請手動執行 ocr。"
+      fi
+    fi
+  else
+    rm -f "$tmp"
+  fi
+}
+
+notify_fallback_switch() {
+  local session_dir files f latest_epoch latest_ts latest_provider latest_model line
+  local last_ts primary ref
+  session_dir="$HOME_DIR/.openclaw/agents/main/sessions"
+  [ -d "$session_dir" ] || return 0
+  files="$(ls -1t "$session_dir"/*.jsonl 2>/dev/null | head -n "$MODEL_SCAN_FILE_COUNT" || true)"
+  [ -n "$files" ] || return 0
+
+  latest_epoch=0
+  latest_ts=""
+  latest_provider=""
+  latest_model=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    while IFS=$'\t' read -r epoch ts provider model; do
+      [ -n "${epoch:-}" ] || continue
+      if [ "${epoch:-0}" -ge "$latest_epoch" ]; then
+        latest_epoch="${epoch:-0}"
+        latest_ts="${ts:-}"
+        latest_provider="${provider:-}"
+        latest_model="${model:-}"
+      fi
+    done < <(
+      jq -r 'select(.type=="model_change") | [(.timestamp|fromdateiso8601? // 0), (.timestamp // ""), (.provider // ""), (.modelId // "")] | @tsv' "$f" 2>/dev/null || true
+    )
+  done <<< "$files"
+
+  [ -n "$latest_ts" ] || return 0
+  last_ts="$(state_get '.model_guard.last_model_event_ts // ""')"
+  [ "$latest_ts" = "$last_ts" ] && return 0
+
+  if [ "${latest_model#${latest_provider}/}" != "$latest_model" ]; then
+    ref="$latest_model"
+  else
+    ref="${latest_provider}/${latest_model}"
+  fi
+
+  line="$(mktemp)"
+  jq --arg ts "$latest_ts" --arg ref "$ref" \
+    '.model_guard.last_model_event_ts = $ts | .model_guard.last_model_ref = $ref' \
+    "$STATE_FILE" >"$line"
+  mv "$line" "$STATE_FILE"
+
+  primary="$(jq -r '.agents.defaults.model.primary // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || true)"
+  if [ -n "$ref" ] && [ "$ref" != "$primary" ] && jq -e --arg ref "$ref" '.agents.defaults.model.fallbacks // [] | index($ref) != null' "$HOME_DIR/.openclaw/openclaw.json" >/dev/null 2>&1; then
+    log "fallback model active: ${ref} (primary=${primary})"
+    send_telegram "ℹ️ 模型切換通知：已切到備援模型 ${ref}（主模型：${primary}）。"
+  fi
+}
+
+enforce_model_guard() {
+  scan_model_failures
+  apply_model_policy
+  notify_fallback_switch
 }
 
 run_core_guard() {
@@ -239,10 +550,27 @@ finish_maintenance() {
 }
 
 openclaw_healthy() {
-  if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1; then
+  if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 \
+    && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1 \
+    && ! pgrep -x openclaw >/dev/null 2>&1; then
     return 1
   fi
-  ss -ltn 2>/dev/null | grep -q ":${OPENCLAW_PORT} " || return 1
+  python - "$OPENCLAW_PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(1.5)
+try:
+    s.connect(("127.0.0.1", port))
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+  [ $? -eq 0 ] || return 1
   return 0
 }
 
@@ -389,7 +717,7 @@ poll_telegram_updates() {
 }
 
 monitor_once() {
-  local now active deadline last_monitor guard_result drift_path
+  local now active deadline last_monitor guard_result drift_path fail_count maintenance_started auto_close
   now="$(date +%s)"
   poll_telegram_updates
 
@@ -397,7 +725,25 @@ monitor_once() {
   deadline="$(state_get '.maintenance.deadline_at // 0')"
 
   if [ "$active" = "true" ]; then
+    maintenance_started="$(state_get '.maintenance.started_at // 0')"
+    auto_close="$(printf '%s' "$MAINTENANCE_AUTO_CLOSE_IF_HEALTHY" | tr '[:upper:]' '[:lower:]')"
+    case "$auto_close" in
+      1|true|yes|on)
+        if [ "$((now - maintenance_started))" -ge "$MAINTENANCE_AUTO_CLOSE_MIN_SECONDS" ] && openclaw_healthy; then
+          log "maintenance auto-finish: openclaw healthy after ${MAINTENANCE_AUTO_CLOSE_MIN_SECONDS}s"
+          finish_maintenance "auto-healthy"
+          return 0
+        fi
+        ;;
+      *) ;;
+    esac
+
     if [ "$now" -gt "$deadline" ]; then
+      if openclaw_healthy; then
+        log "maintenance timeout reached but openclaw healthy; auto-finishing"
+        finish_maintenance "timeout-healthy"
+        return 0
+      fi
       log "maintenance timeout reached"
       send_telegram "⚠️ Watchdog: 更新握手逾時，啟動自動回滾救援。"
       state_set '.maintenance.active=false | .maintenance.reason="" | .maintenance.started_at=0 | .maintenance.deadline_at=0'
@@ -406,8 +752,16 @@ monitor_once() {
     return 0
   fi
 
+  enforce_model_guard
+
   drift_path="$(critical_drift_detected 2>/dev/null || true)"
   if [ -n "$drift_path" ]; then
+    if is_true_flag "$DRIFT_AUTO_BASELINE_IF_HEALTHY" && drift_auto_heal_allowed_path "$drift_path" && openclaw_healthy; then
+      log "critical drift auto-baseline: ${drift_path}"
+      refresh_critical_manifest || true
+      send_telegram "🩹 Watchdog: 偵測到受控腳本更新（${drift_path}），OpenClaw 健康，已自動更新 baseline，不回滾。"
+      return 0
+    fi
     send_telegram "🚨 Watchdog: 偵測到底層檔案漂移（${drift_path}），啟動救援回滾。"
     trigger_rescue "critical-drift"
     return 0
@@ -415,12 +769,10 @@ monitor_once() {
 
   guard_result="$(run_core_guard 2>/dev/null || true)"
   if [ "$guard_result" = "changed" ]; then
-    send_telegram "🩹 Watchdog: 偵測到危險配置已自動修復，正在重啟 OpenClaw。"
-    if restart_openclaw_after_guard; then
-      log "guard-triggered restart success"
-    else
-      log "guard-triggered restart failed; rescue may be required"
-    fi
+    send_telegram "🩹 Watchdog: 偵測到危險配置已自動修復，先進入觀察模式，不立即回滾。"
+    state_set ".started_at=${now} | .last_monitor_ts=${now} | .consecutive_health_failures=0"
+    log "guard-heal observed; grace window reset without forced restart"
+    return 0
   fi
 
   last_monitor="$(state_get '.last_monitor_ts // 0')"
@@ -435,9 +787,25 @@ monitor_once() {
   state_set ".last_monitor_ts=${now}"
 
   if ! openclaw_healthy; then
-    log "health check failed"
-    trigger_rescue "healthcheck-failed"
+    fail_count="$(state_get '.consecutive_health_failures // 0')"
+    fail_count="$((fail_count + 1))"
+    state_set ".consecutive_health_failures=${fail_count}"
+    log "health check failed (consecutive=${fail_count}/${HEALTHCHECK_FAIL_THRESHOLD})"
+    if [ "$fail_count" -lt "$HEALTHCHECK_FAIL_THRESHOLD" ]; then
+      send_telegram "⚠️ Watchdog: 健康檢查失敗（${fail_count}/${HEALTHCHECK_FAIL_THRESHOLD}），先嘗試重啟，不立即回滾。"
+      if restart_openclaw_after_guard; then
+        now="$(date +%s)"
+        state_set ".started_at=${now} | .last_monitor_ts=${now} | .consecutive_health_failures=0"
+        log "health self-restart success; grace reset"
+      else
+        log "health self-restart failed; awaiting next monitor before rescue"
+      fi
+    else
+      trigger_rescue "healthcheck-failed"
+      state_set '.consecutive_health_failures=0'
+    fi
   else
+    state_set '.consecutive_health_failures=0'
     log "health check ok"
   fi
 }
@@ -456,11 +824,12 @@ run_daemon() {
   trap 'rm -f "$PID_FILE"' EXIT
 
   now="$(date +%s)"
-  state_set ".started_at=${now} | .last_monitor_ts=${now}"
+  state_set ".started_at=${now} | .last_monitor_ts=${now} | .consecutive_health_failures=0"
   guard_result="$(run_core_guard 2>/dev/null || true)"
   if [ "$guard_result" = "changed" ]; then
     send_telegram "🩹 Watchdog: 開機時修復了 OpenClaw 危險配置。"
   fi
+  enforce_model_guard
   refresh_critical_manifest || true
   poll_mode="disabled"
   case "$(printf '%s' "$WATCHDOG_TELEGRAM_POLL_ENABLED" | tr '[:upper:]' '[:lower:]')" in

@@ -262,6 +262,32 @@
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+附錄 C｜手機端 OpenClaw 更新強制規範（Termux）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【C-1】唯一允許的更新入口
+  - 手機端主系統更新只能透過以下腳本：
+      scripts/termux-main-system-update.sh
+  - 禁止 AI 直接用 `openclaw update` 當成完整更新流程。
+  - 禁止 AI 在未握手看門狗的情況下執行更新。
+
+【C-2】標準更新指令
+  - 建議指令：
+      ocupdate
+  - 強制 npm fallback 指令：
+      ocupdate_force
+
+【C-3】Termux 專用 fallback 規則
+  - 當 `openclaw update` 失敗或版本未達 npm 最新版時，必須改用：
+      npm install -g openclaw@<latest> --prefix ~/.npm-global --ignore-scripts
+  - 原因：Termux 可能出現 native postinstall 失敗（例如 koffi 類型問題）。
+
+【C-4】更新完成判定
+  - 只有在 `openclaw health` 通過後，才可回報更新成功。
+  - 若健康檢查失敗，必須進入救援回滾流程，不可回報成功。
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 附錄 B｜如何使用本規範
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

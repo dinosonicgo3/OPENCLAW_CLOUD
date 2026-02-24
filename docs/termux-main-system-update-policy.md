@@ -2,6 +2,11 @@
 
 This policy defines a safe, repeatable update process for the phone-side Termux environment after OpenClaw is deployed.
 
+Canonical updater:
+
+- `scripts/termux-main-system-update.sh`
+- Detailed runbook: `docs/termux-openclaw-update.md`
+
 ## Scope
 
 - Device: Android + Termux runtime
@@ -35,7 +40,30 @@ ts="$(date +%Y%m%d-%H%M%S)"
 tar -czf ~/backups/openclaw-state-"$ts".tar.gz ~/.openclaw ~/.bashrc ~/.termux
 ```
 
-## Standard update procedure
+## Standard update procedure (canonical)
+
+Use the core update script instead of manual ad-hoc commands:
+
+```bash
+ocupdate
+```
+
+or:
+
+```bash
+bash ~/DINO_OPENCLAW/scripts/termux-main-system-update.sh
+```
+
+The script includes:
+
+- watchdog maintenance handshake
+- backup snapshot
+- `openclaw update` first pass
+- Termux npm fallback (`--ignore-scripts`) when needed
+- doctor fix + restart + health gate
+- auto-rescue trigger on unhealthy post-update state
+
+## Manual fallback procedure (advanced only)
 
 ### 1) Stop runtime cleanly
 
@@ -52,12 +80,12 @@ pkg upgrade -y
 pkg install -y nodejs-lts git curl jq tmux openssh termux-api
 ```
 
-### 3) Update OpenClaw runtime
+### 3) Update OpenClaw runtime (Termux-safe)
 
 ```bash
 export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
 npm config set prefix "$HOME/.npm-global"
-npm install -g openclaw@latest
+npm install -g openclaw@latest --prefix "$HOME/.npm-global" --ignore-scripts
 ```
 
 ### 4) Validate required config
@@ -71,7 +99,6 @@ Expected values:
 
 - primary model: `nvidia/z-ai/glm4.7`
 - fallback models include:
-  - `nvidia/zai-org/GLM-5`
   - `nvidia/moonshotai/kimi-k2.5`
   - `nvidia/openai/gpt-oss-120b`
   - `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`

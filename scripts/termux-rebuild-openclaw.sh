@@ -103,6 +103,7 @@ OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(date +%s | sha256sum | cut -
 OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$REPO_DIR}"
 CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
 OBSIDIAN_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-obsidian-integrate.sh"
+UPDATE_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-main-system-update.sh"
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
   log "TELEGRAM_BOT_TOKEN is required"
@@ -149,14 +150,6 @@ jq -n \
               maxTokens: 8192
             },
             {
-              id: "zai-org/GLM-5",
-              name: "GLM 5 (NVIDIA)",
-              reasoning: true,
-              input: ["text"],
-              contextWindow: 131072,
-              maxTokens: 8192
-            },
-            {
               id: "moonshotai/kimi-k2.5",
               name: "Kimi K2.5 (NVIDIA)",
               reasoning: true,
@@ -189,7 +182,6 @@ jq -n \
         model: {
           primary: "nvidia/z-ai/glm4.7",
           fallbacks: [
-            "nvidia/zai-org/GLM-5",
             "nvidia/moonshotai/kimi-k2.5",
             "nvidia/openai/gpt-oss-120b",
             "nvidia/nvidia/llama-3.1-nemotron-70b-instruct"
@@ -231,6 +223,8 @@ alias dogrescue='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/
 alias dogmaint_start='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --maintenance-start manual'
 alias dogmaint_ok='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --maintenance-ok manual'
 alias coreguard='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-core-guard.sh" --fix'
+alias ocupdate='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-main-system-update.sh"'
+alias ocupdate_force='FORCE_NPM_UPDATE=1 bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-main-system-update.sh"'
 # --- OPENCLAW_TERMUX_RUNTIME_END ---
 EOF
 
@@ -284,6 +278,9 @@ fi
 if [ -f "$OBSIDIAN_SCRIPT" ]; then
   chmod 700 "$OBSIDIAN_SCRIPT"
 fi
+if [ -f "$UPDATE_SCRIPT" ]; then
+  chmod 700 "$UPDATE_SCRIPT"
+fi
 
 if [ "$SKIP_WATCHDOG" != "1" ]; then
 log "writing watchdog env"
@@ -301,6 +298,8 @@ MONITOR_INTERVAL_SECONDS="1800"
 MAINTENANCE_TIMEOUT_SECONDS="1800"
 RESCUE_COOLDOWN_SECONDS="300"
 STARTUP_GRACE_SECONDS="300"
+MODEL_POLICY_RESTART_ON_CHANGE="0"
+DRIFT_AUTO_BASELINE_IF_HEALTHY="1"
 EOF
 chmod 600 "$HOME/.openclaw-watchdog.env"
 fi
