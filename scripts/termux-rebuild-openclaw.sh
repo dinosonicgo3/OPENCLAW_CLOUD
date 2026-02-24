@@ -237,6 +237,10 @@ jq -n \
             "nvidia/openai/gpt-oss-120b",
             "nvidia/nvidia/llama-3.1-nemotron-70b-instruct"
           ]
+        },
+        memorySearch: {
+          provider: "local",
+          fallback: "none"
         }
       }
     },
@@ -309,6 +313,10 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
         else
           .
         end
+      | .agents.defaults.memorySearch = (.agents.defaults.memorySearch // {})
+      | .agents.defaults.memorySearch.provider = "local"
+      | .agents.defaults.memorySearch.fallback = "none"
+      | del(.agents.defaults.memorySearch.remote)
     ' "$BASE_CFG_TMP" "$PREV_CFG_BACKUP" >"$FINAL_CFG_TMP"
 else
   cp -f "$BASE_CFG_TMP" "$FINAL_CFG_TMP"
@@ -420,6 +428,9 @@ RESCUE_COOLDOWN_SECONDS="300"
 STARTUP_GRACE_SECONDS="300"
 MODEL_POLICY_RESTART_ON_CHANGE="0"
 DRIFT_AUTO_BASELINE_IF_HEALTHY="1"
+SELF_CHECK_ENFORCE_LOCAL_MEMORY="1"
+SELFCHECK_INTERVAL_SECONDS="1800"
+SELFCHECK_ALERT_COOLDOWN_SECONDS="3600"
 EOF
 chmod 600 "$HOME/.openclaw-watchdog.env"
 fi

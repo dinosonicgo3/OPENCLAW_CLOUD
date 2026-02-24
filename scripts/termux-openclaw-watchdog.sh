@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.6.1"
+WATCHDOG_VERSION="1.7.0"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
@@ -32,6 +32,9 @@ MODEL_COOLDOWN_SOFT_THRESHOLD="${MODEL_COOLDOWN_SOFT_THRESHOLD:-3}"
 MODEL_SCAN_FILE_COUNT="${MODEL_SCAN_FILE_COUNT:-30}"
 MODEL_POLICY_RESTART_ON_CHANGE="${MODEL_POLICY_RESTART_ON_CHANGE:-0}"
 DRIFT_AUTO_BASELINE_IF_HEALTHY="${DRIFT_AUTO_BASELINE_IF_HEALTHY:-1}"
+SELFCHECK_INTERVAL_SECONDS="${SELFCHECK_INTERVAL_SECONDS:-1800}"
+SELFCHECK_ALERT_COOLDOWN_SECONDS="${SELFCHECK_ALERT_COOLDOWN_SECONDS:-3600}"
+SELF_CHECK_ENFORCE_LOCAL_MEMORY="${SELF_CHECK_ENFORCE_LOCAL_MEMORY:-1}"
 
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -93,6 +96,11 @@ state_init() {
     "last_model_ref": "",
     "blocked_until": {},
     "blocked_reason": {}
+  },
+  "selfcheck": {
+    "last_run_ts": 0,
+    "last_alert_ts": 0,
+    "last_alert_sig": ""
   }
 }
 EOF
@@ -133,7 +141,11 @@ state_migrate() {
     .model_guard.last_model_event_ts = (.model_guard.last_model_event_ts // "") |
     .model_guard.last_model_ref = (.model_guard.last_model_ref // "") |
     .model_guard.blocked_until = (.model_guard.blocked_until // {}) |
-    .model_guard.blocked_reason = (.model_guard.blocked_reason // {})
+    .model_guard.blocked_reason = (.model_guard.blocked_reason // {}) |
+    .selfcheck = (.selfcheck // {}) |
+    .selfcheck.last_run_ts = (.selfcheck.last_run_ts // 0) |
+    .selfcheck.last_alert_ts = (.selfcheck.last_alert_ts // 0) |
+    .selfcheck.last_alert_sig = (.selfcheck.last_alert_sig // "")
   ' "$STATE_FILE" >"$tmp"
   mv "$tmp" "$STATE_FILE"
 }
@@ -213,6 +225,164 @@ is_true_flag() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+ensure_local_memory_config() {
+  local cfg tmp
+  cfg="$HOME_DIR/.openclaw/openclaw.json"
+  [ -f "$cfg" ] || return 1
+  tmp="$(mktemp)"
+  if ! jq '
+    .agents = (.agents // {}) |
+    .agents.defaults = (.agents.defaults // {}) |
+    .agents.defaults.memorySearch = (.agents.defaults.memorySearch // {}) |
+    .agents.defaults.memorySearch.provider = "local" |
+    .agents.defaults.memorySearch.fallback = "none" |
+    del(.agents.defaults.memorySearch.remote)
+  ' "$cfg" >"$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! cmp -s "$cfg" "$tmp"; then
+    cp -f "$cfg" "$cfg.bak.selfcheck.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    mv "$tmp" "$cfg"
+    chmod 600 "$cfg" >/dev/null 2>&1 || true
+    log "selfcheck auto-fixed memorySearch to local/no-remote"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+run_full_selfcheck() {
+  local now notify_mode cfg cfg_port env_port provider_cfg workspace_path mem_files
+  local mem_status_json mem_indexed mem_scanned mem_provider_runtime issues_text
+  local last_alert_sig last_alert_ts sig should_notify summary
+  local -a issues
+  issues=()
+  now="${1:-$(date +%s)}"
+  notify_mode="${2:-auto}"
+  cfg="$HOME_DIR/.openclaw/openclaw.json"
+  env_port="${OPENCLAW_PORT:-}"
+
+  if is_true_flag "$SELF_CHECK_ENFORCE_LOCAL_MEMORY"; then
+    if ensure_local_memory_config; then
+      issues+=("已自動修正 memorySearch 為 local/no-remote。")
+    fi
+  fi
+
+  if [ ! -f "$cfg" ]; then
+    issues+=("缺少主配置檔：$cfg")
+  else
+    cfg_port="$(jq -r '.gateway.port // empty' "$cfg" 2>/dev/null || true)"
+    if [ -n "$cfg_port" ] && [ -n "$env_port" ] && [ "$cfg_port" != "$env_port" ]; then
+      issues+=("OpenClaw/Watchdog port 不一致（config=${cfg_port}, watchdog=${env_port}）。")
+    fi
+
+    provider_cfg="$(jq -r '.agents.defaults.memorySearch.provider // "unset"' "$cfg" 2>/dev/null || echo unset)"
+    if [ "$provider_cfg" != "local" ]; then
+      issues+=("memorySearch.provider 非 local（目前=${provider_cfg}）。")
+    fi
+    if jq -e '.agents.defaults.memorySearch.remote.apiKey? | strings | length > 0' "$cfg" >/dev/null 2>&1; then
+      issues+=("memorySearch.remote.apiKey 仍存在（應移除以避免雲端同步）。")
+    fi
+
+    workspace_path="$(jq -r '.agents.defaults.workspace // empty' "$cfg" 2>/dev/null || true)"
+    if [ -z "$workspace_path" ]; then
+      workspace_path="$HOME_DIR/.openclaw/workspace"
+    elif [ "${workspace_path#~/}" != "$workspace_path" ]; then
+      workspace_path="$HOME_DIR/${workspace_path#~/}"
+    fi
+    if [ ! -e "$workspace_path" ] && [ ! -L "$workspace_path" ]; then
+      issues+=("workspace 路徑不存在：${workspace_path}")
+    fi
+
+    mem_files="$(find -L "${workspace_path}/memory" -type f -name '*.md' 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0)"
+    if ! printf '%s' "$mem_files" | grep -Eq '^[0-9]+$'; then
+      mem_files=0
+    fi
+  fi
+
+  for p in \
+    "$REPO_DIR/scripts/termux-openclaw-watchdog.sh" \
+    "$REPO_DIR/scripts/termux-openclaw-core-guard.sh" \
+    "$REPO_DIR/scripts/termux-rebuild-openclaw.sh" \
+    "$REPO_DIR/scripts/termux-main-system-update.sh" \
+    "$HOME_DIR/.termux/boot/openclaw-launch.sh" \
+    "$HOME_DIR/.termux/boot/openclaw-watchdog-launch.sh" \
+    "$HOME_DIR/.termux/boot/start-openclaw.sh"; do
+    if [ ! -x "$p" ]; then
+      issues+=("腳本不可執行：$p")
+    fi
+  done
+
+  mem_status_json=""
+  if command -v timeout >/dev/null 2>&1; then
+    mem_status_json="$(timeout 25 openclaw memory status --json 2>/dev/null || true)"
+  else
+    mem_status_json="$(openclaw memory status --json 2>/dev/null || true)"
+  fi
+  if [ -n "$mem_status_json" ]; then
+    mem_indexed="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.files // 0' 2>/dev/null || echo 0)"
+    mem_scanned="$(printf '%s' "$mem_status_json" | jq -r '.[0].scan.totalFiles // 0' 2>/dev/null || echo 0)"
+    mem_provider_runtime="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.provider // "unknown"' 2>/dev/null || echo unknown)"
+    if ! printf '%s' "$mem_indexed" | grep -Eq '^[0-9]+$'; then mem_indexed=0; fi
+    if ! printf '%s' "$mem_scanned" | grep -Eq '^[0-9]+$'; then mem_scanned=0; fi
+    if [ "$mem_scanned" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
+      issues+=("記憶索引異常：indexed=${mem_indexed}/${mem_scanned}（provider=${mem_provider_runtime}）。")
+    fi
+    if [ "${mem_files:-0}" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
+      issues+=("記憶檔存在(${mem_files})但索引為 0，memory_search 會回空。")
+    fi
+  else
+    issues+=("無法取得 memory status（openclaw memory status --json）。")
+  fi
+
+  if [ "${#issues[@]}" -gt 0 ]; then
+    issues_text="$(printf '%s\n' "${issues[@]}")"
+    sig="$(printf '%s' "$issues_text" | sha256sum | awk '{print $1}')"
+    last_alert_sig="$(state_get '.selfcheck.last_alert_sig // ""')"
+    last_alert_ts="$(state_get '.selfcheck.last_alert_ts // 0')"
+    should_notify=0
+    if [ "$notify_mode" = "force" ]; then
+      should_notify=1
+    elif [ "$sig" != "$last_alert_sig" ]; then
+      should_notify=1
+    elif [ "$((now - last_alert_ts))" -ge "$SELFCHECK_ALERT_COOLDOWN_SECONDS" ]; then
+      should_notify=1
+    fi
+
+    summary="$(printf '%s\n' "${issues[@]}" | head -n 12)"
+    log "full self-check issues: $(printf '%s' "$summary" | tr '\n' '; ')"
+    if [ "$should_notify" -eq 1 ]; then
+      send_telegram "🩺 Watchdog 全功能自檢發現問題：
+${summary}
+（已啟用主動提醒）"
+      state_set ".selfcheck.last_alert_ts=${now} | .selfcheck.last_alert_sig=\"${sig}\""
+    fi
+    printf 'issues\n'
+    return 1
+  fi
+
+  last_alert_sig="$(state_get '.selfcheck.last_alert_sig // ""')"
+  if [ -n "$last_alert_sig" ] || [ "$notify_mode" = "force" ]; then
+    send_telegram "✅ Watchdog 全功能自檢通過：核心檔案/記憶/skills/Obsidian 檢查正常。"
+    state_set ".selfcheck.last_alert_ts=${now} | .selfcheck.last_alert_sig=\"\""
+  fi
+  log "full self-check passed"
+  printf 'ok\n'
+  return 0
+}
+
+maybe_run_full_selfcheck() {
+  local now last_run
+  now="${1:-$(date +%s)}"
+  last_run="$(state_get '.selfcheck.last_run_ts // 0')"
+  if [ "$((now - last_run))" -lt "$SELFCHECK_INTERVAL_SECONDS" ]; then
+    return 0
+  fi
+  state_set ".selfcheck.last_run_ts=${now}"
+  run_full_selfcheck "$now" "auto" >/dev/null 2>&1 || true
 }
 
 disallowed_model_ref() {
@@ -789,6 +959,7 @@ monitor_once() {
     return 0
   fi
 
+  maybe_run_full_selfcheck "$now"
   enforce_model_guard
 
   drift_path="$(critical_drift_detected 2>/dev/null || true)"
@@ -866,6 +1037,7 @@ run_daemon() {
   if [ "$guard_result" = "changed" ]; then
     send_telegram "🩹 Watchdog: 開機時修復了 OpenClaw 危險配置。"
   fi
+  run_full_selfcheck "$now" "auto" >/dev/null 2>&1 || true
   enforce_model_guard
   refresh_critical_manifest || true
   poll_mode="disabled"
@@ -892,6 +1064,7 @@ Usage:
   termux-openclaw-watchdog.sh --once
   termux-openclaw-watchdog.sh --status
   termux-openclaw-watchdog.sh --baseline-refresh
+  termux-openclaw-watchdog.sh --selfcheck
   termux-openclaw-watchdog.sh --rescue <reason>
   termux-openclaw-watchdog.sh --maintenance-start <reason>
   termux-openclaw-watchdog.sh --maintenance-ok <reason>
@@ -911,6 +1084,10 @@ case "${1:---daemon}" in
     ;;
   --baseline-refresh)
     refresh_critical_manifest
+    ;;
+  --selfcheck)
+    state_init
+    run_full_selfcheck "$(date +%s)" "force" || true
     ;;
   --rescue)
     state_init
