@@ -195,7 +195,7 @@ jq -n \
             {
               id: "z-ai/glm4.7",
               name: "GLM 4.7 (NVIDIA)",
-              reasoning: true,
+              reasoning: false,
               input: ["text"],
               contextWindow: 131072,
               maxTokens: 8192
@@ -203,7 +203,7 @@ jq -n \
             {
               id: "moonshotai/kimi-k2.5",
               name: "Kimi K2.5 (NVIDIA)",
-              reasoning: true,
+              reasoning: false,
               input: ["text"],
               contextWindow: 131072,
               maxTokens: 8192
