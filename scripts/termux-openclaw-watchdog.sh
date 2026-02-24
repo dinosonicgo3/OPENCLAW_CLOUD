@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.7.0"
+WATCHDOG_VERSION="1.7.1"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
@@ -35,6 +35,8 @@ DRIFT_AUTO_BASELINE_IF_HEALTHY="${DRIFT_AUTO_BASELINE_IF_HEALTHY:-1}"
 SELFCHECK_INTERVAL_SECONDS="${SELFCHECK_INTERVAL_SECONDS:-1800}"
 SELFCHECK_ALERT_COOLDOWN_SECONDS="${SELFCHECK_ALERT_COOLDOWN_SECONDS:-3600}"
 SELF_CHECK_ENFORCE_LOCAL_MEMORY="${SELF_CHECK_ENFORCE_LOCAL_MEMORY:-1}"
+OPENCLAW_MEMORY_EMBEDDING_MODEL="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
+OPENCLAW_MEMORY_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
 
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -238,6 +240,9 @@ ensure_local_memory_config() {
     .agents.defaults.memorySearch = (.agents.defaults.memorySearch // {}) |
     .agents.defaults.memorySearch.provider = "local" |
     .agents.defaults.memorySearch.fallback = "none" |
+    .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {}) |
+    .agents.defaults.memorySearch.local.modelPath = env.OPENCLAW_MEMORY_EMBEDDING_MODEL |
+    .agents.defaults.memorySearch.local.modelCacheDir = env.OPENCLAW_MEMORY_MODEL_CACHE_DIR |
     del(.agents.defaults.memorySearch.remote)
   ' "$cfg" >"$tmp"; then
     rm -f "$tmp"
@@ -247,7 +252,7 @@ ensure_local_memory_config() {
     cp -f "$cfg" "$cfg.bak.selfcheck.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
     mv "$tmp" "$cfg"
     chmod 600 "$cfg" >/dev/null 2>&1 || true
-    log "selfcheck auto-fixed memorySearch to local/no-remote"
+    log "selfcheck auto-fixed memorySearch to local/no-remote with EmbeddingGemma-300M"
     return 0
   fi
   rm -f "$tmp"
@@ -255,8 +260,8 @@ ensure_local_memory_config() {
 }
 
 run_full_selfcheck() {
-  local now notify_mode cfg cfg_port env_port provider_cfg workspace_path mem_files
-  local mem_status_json mem_indexed mem_scanned mem_provider_runtime issues_text
+  local now notify_mode cfg cfg_port env_port provider_cfg workspace_path mem_files cfg_embed_model cfg_embed_cache
+  local mem_status_json mem_indexed mem_scanned mem_provider_runtime mem_model_runtime issues_text
   local last_alert_sig last_alert_ts sig should_notify summary
   local -a issues
   issues=()
@@ -282,6 +287,14 @@ run_full_selfcheck() {
     provider_cfg="$(jq -r '.agents.defaults.memorySearch.provider // "unset"' "$cfg" 2>/dev/null || echo unset)"
     if [ "$provider_cfg" != "local" ]; then
       issues+=("memorySearch.provider 非 local（目前=${provider_cfg}）。")
+    fi
+    cfg_embed_model="$(jq -r '.agents.defaults.memorySearch.local.modelPath // empty' "$cfg" 2>/dev/null || true)"
+    cfg_embed_cache="$(jq -r '.agents.defaults.memorySearch.local.modelCacheDir // empty' "$cfg" 2>/dev/null || true)"
+    if [ "$cfg_embed_model" != "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ]; then
+      issues+=("記憶嵌入模型不符（config=${cfg_embed_model:-unset}, expected=${OPENCLAW_MEMORY_EMBEDDING_MODEL}）。")
+    fi
+    if [ -n "$cfg_embed_cache" ] && [ "$cfg_embed_cache" != "$OPENCLAW_MEMORY_MODEL_CACHE_DIR" ]; then
+      issues+=("記憶模型快取路徑不符（config=${cfg_embed_cache}, expected=${OPENCLAW_MEMORY_MODEL_CACHE_DIR}）。")
     fi
     if jq -e '.agents.defaults.memorySearch.remote.apiKey? | strings | length > 0' "$cfg" >/dev/null 2>&1; then
       issues+=("memorySearch.remote.apiKey 仍存在（應移除以避免雲端同步）。")
@@ -326,8 +339,12 @@ run_full_selfcheck() {
     mem_indexed="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.files // 0' 2>/dev/null || echo 0)"
     mem_scanned="$(printf '%s' "$mem_status_json" | jq -r '.[0].scan.totalFiles // 0' 2>/dev/null || echo 0)"
     mem_provider_runtime="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.provider // "unknown"' 2>/dev/null || echo unknown)"
+    mem_model_runtime="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.model // empty' 2>/dev/null || true)"
     if ! printf '%s' "$mem_indexed" | grep -Eq '^[0-9]+$'; then mem_indexed=0; fi
     if ! printf '%s' "$mem_scanned" | grep -Eq '^[0-9]+$'; then mem_scanned=0; fi
+    if [ "$mem_provider_runtime" = "local" ] && [ -n "$mem_model_runtime" ] && [ "$mem_model_runtime" != "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ]; then
+      issues+=("記憶運行模型不符（runtime=${mem_model_runtime}, expected=${OPENCLAW_MEMORY_EMBEDDING_MODEL}）。")
+    fi
     if [ "$mem_scanned" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
       issues+=("記憶索引異常：indexed=${mem_indexed}/${mem_scanned}（provider=${mem_provider_runtime}）。")
     fi

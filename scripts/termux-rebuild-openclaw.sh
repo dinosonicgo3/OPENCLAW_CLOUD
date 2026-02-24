@@ -49,6 +49,9 @@ PREV_CFG_PATH="$HOME/.openclaw/openclaw.json"
 PREV_ENV_PATH="$HOME/.openclaw-watchdog.env"
 PREV_CFG_BACKUP=""
 PREV_ENV_BACKUP=""
+EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
+EMBEDDING_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME/.cache/openclaw/models}"
+EMBEDDING_WARMUP_ON_REBUILD="${EMBEDDING_WARMUP_ON_REBUILD:-1}"
 
 log "stopping old claw processes"
 pkill -9 -x zeroclaw >/dev/null 2>&1 || true
@@ -178,6 +181,8 @@ jq -n \
   --arg telegramToken "$TELEGRAM_BOT_TOKEN" \
   --arg telegramOwner "$TELEGRAM_OWNER_ID" \
   --arg nvidiaKey "$NVIDIA_API_KEY" \
+  --arg embeddingModel "$EMBEDDING_MODEL_REF" \
+  --arg embeddingCacheDir "$EMBEDDING_MODEL_CACHE_DIR" \
   '{
     gateway: {
       mode: "local",
@@ -240,7 +245,11 @@ jq -n \
         },
         memorySearch: {
           provider: "local",
-          fallback: "none"
+          fallback: "none",
+          local: {
+            modelPath: $embeddingModel,
+            modelCacheDir: $embeddingCacheDir
+          }
         }
       }
     },
@@ -264,6 +273,8 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
     --arg telegramToken "$TELEGRAM_BOT_TOKEN" \
     --arg telegramOwner "$TELEGRAM_OWNER_ID" \
     --arg nvidiaKey "$NVIDIA_API_KEY" \
+    --arg embeddingModel "$EMBEDDING_MODEL_REF" \
+    --arg embeddingCacheDir "$EMBEDDING_MODEL_CACHE_DIR" \
     '
       .[0] * .[1]
       | .gateway = (.gateway // {})
@@ -316,6 +327,9 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
       | .agents.defaults.memorySearch = (.agents.defaults.memorySearch // {})
       | .agents.defaults.memorySearch.provider = "local"
       | .agents.defaults.memorySearch.fallback = "none"
+      | .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {})
+      | .agents.defaults.memorySearch.local.modelPath = $embeddingModel
+      | .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir
       | del(.agents.defaults.memorySearch.remote)
     ' "$BASE_CFG_TMP" "$PREV_CFG_BACKUP" >"$FINAL_CFG_TMP"
 else
@@ -431,6 +445,8 @@ DRIFT_AUTO_BASELINE_IF_HEALTHY="1"
 SELF_CHECK_ENFORCE_LOCAL_MEMORY="1"
 SELFCHECK_INTERVAL_SECONDS="1800"
 SELFCHECK_ALERT_COOLDOWN_SECONDS="3600"
+OPENCLAW_MEMORY_EMBEDDING_MODEL="$EMBEDDING_MODEL_REF"
+OPENCLAW_MEMORY_MODEL_CACHE_DIR="$EMBEDDING_MODEL_CACHE_DIR"
 EOF
 chmod 600 "$HOME/.openclaw-watchdog.env"
 fi
@@ -449,6 +465,15 @@ if [ "$SKIP_WATCHDOG" != "1" ]; then
   tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
 fi
 sleep 3
+
+if is_true_flag "$EMBEDDING_WARMUP_ON_REBUILD"; then
+  if ! pgrep -f "openclaw-memory|openclaw memory index" >/dev/null 2>&1; then
+    log "warming local memory index with EmbeddingGemma-300M"
+    nohup bash -lc 'export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"; export TMPDIR="${TMPDIR:-$HOME/tmp}"; openclaw memory index --force --verbose' >>"$HOME/openclaw-logs/memory-index.log" 2>&1 &
+  else
+    log "memory warmup already running; skip"
+  fi
+fi
 
 log "openclaw version: $(openclaw --version 2>/dev/null || echo unavailable)"
 log "channel: $OPENCLAW_CHANNEL"
