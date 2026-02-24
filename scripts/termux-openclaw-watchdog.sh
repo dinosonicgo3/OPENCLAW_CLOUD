@@ -579,14 +579,35 @@ resolve_stable_tag() {
   git -C "$REPO_DIR" tag -l '穩定版*' --sort=-creatordate | head -n1
 }
 
+config_looks_complete() {
+  local cfg="$1"
+  [ -f "$cfg" ] || return 1
+  jq -e '
+    ((keys | length) >= 6)
+    and ((.gateway.port | tonumber?) != null)
+    and ((.channels.telegram.enabled // false) == true)
+    and (((.channels.telegram.allowFrom // []) | length) > 0)
+    and ((.agents.defaults.model.primary // "") | length > 0)
+    and ((.models.providers | type) == "object")
+    and ((.models.providers | keys | length) > 0)
+  ' "$cfg" >/dev/null 2>&1
+}
+
 rollback_and_rebuild() {
   local reason="$1"
-  local stable_tag target
+  local stable_tag target cfg_path rescue_cfg_backup
   stable_tag="$(resolve_stable_tag)"
   target="${stable_tag:-origin/${REPO_BRANCH}}"
+  cfg_path="$HOME_DIR/.openclaw/openclaw.json"
+  rescue_cfg_backup=""
 
   log "rescue start: reason=${reason}, target=${target}"
   send_telegram "🚨 Watchdog 救援啟動：${reason}\n目標版本：${target}"
+
+  if [ -f "$cfg_path" ]; then
+    rescue_cfg_backup="$STATE_DIR/openclaw.json.pre-rescue.$(date +%Y%m%d-%H%M%S)"
+    cp -f "$cfg_path" "$rescue_cfg_backup" >/dev/null 2>&1 || rescue_cfg_backup=""
+  fi
 
   pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
   pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
@@ -606,6 +627,9 @@ rollback_and_rebuild() {
   TELEGRAM_OWNER_ID="$TELEGRAM_OWNER_ID" \
   NVIDIA_API_KEY="$NVIDIA_API_KEY" \
   OPENCLAW_PORT="$OPENCLAW_PORT" \
+  OPENCLAW_REBUILD_MODE="rescue" \
+  OPENCLAW_REBUILD_PRESERVE_CONFIG=1 \
+  OPENCLAW_REBUILD_PRESERVE_STATE=1 \
   OPENCLAW_REBUILD_SKIP_WATCHDOG=1 \
   bash "$REPO_DIR/scripts/termux-rebuild-openclaw.sh" >>"$LOG_FILE" 2>&1 || {
     log "rescue failed: rebuild script exited non-zero"
@@ -613,6 +637,19 @@ rollback_and_rebuild() {
     return 1
   }
   run_core_guard >/dev/null 2>&1 || true
+
+  if ! config_looks_complete "$cfg_path"; then
+    if [ -n "$rescue_cfg_backup" ] && [ -f "$rescue_cfg_backup" ] && jq -e . "$rescue_cfg_backup" >/dev/null 2>&1; then
+      log "rescue detected oversimplified config; restoring pre-rescue config backup"
+      cp -f "$rescue_cfg_backup" "$cfg_path"
+      chmod 600 "$cfg_path" >/dev/null 2>&1 || true
+      run_core_guard >/dev/null 2>&1 || true
+      send_telegram "🛠️ Watchdog: 救援後偵測到精簡配置，已自動還原完整配置並套用安全修復。"
+    else
+      log "rescue detected oversimplified config but no valid backup"
+      send_telegram "⚠️ Watchdog: 救援後配置疑似被精簡，且無可用備份，請人工檢查。"
+    fi
+  fi
 
   sleep 8
   if openclaw_healthy; then

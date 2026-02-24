@@ -5,6 +5,13 @@ log() {
   printf "[termux-rebuild] %s\n" "$*"
 }
 
+is_true_flag() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     log "missing command: $1"
@@ -34,6 +41,14 @@ export DEBIAN_FRONTEND=noninteractive
 export TMPDIR="${TMPDIR:-$HOME/tmp}"
 mkdir -p "$TMPDIR"
 SKIP_WATCHDOG="${OPENCLAW_REBUILD_SKIP_WATCHDOG:-0}"
+REBUILD_MODE="${OPENCLAW_REBUILD_MODE:-standard}"
+PRESERVE_CONFIG="${OPENCLAW_REBUILD_PRESERVE_CONFIG:-1}"
+PRESERVE_STATE="${OPENCLAW_REBUILD_PRESERVE_STATE:-1}"
+REBUILD_BACKUP_DIR="$HOME/.openclaw-rebuild-backup"
+PREV_CFG_PATH="$HOME/.openclaw/openclaw.json"
+PREV_ENV_PATH="$HOME/.openclaw-watchdog.env"
+PREV_CFG_BACKUP=""
+PREV_ENV_BACKUP=""
 
 log "stopping old claw processes"
 pkill -9 -x zeroclaw >/dev/null 2>&1 || true
@@ -49,19 +64,34 @@ if [ "$SKIP_WATCHDOG" != "1" ]; then
   tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
 fi
 
-log "removing zeroclaw and old openclaw data"
+mkdir -p "$REBUILD_BACKUP_DIR"
+if [ -f "$PREV_CFG_PATH" ]; then
+  PREV_CFG_BACKUP="$REBUILD_BACKUP_DIR/openclaw.json.pre-rebuild.$(date +%Y%m%d-%H%M%S)"
+  cp -f "$PREV_CFG_PATH" "$PREV_CFG_BACKUP" >/dev/null 2>&1 || PREV_CFG_BACKUP=""
+fi
+if [ -f "$PREV_ENV_PATH" ]; then
+  PREV_ENV_BACKUP="$REBUILD_BACKUP_DIR/openclaw-watchdog.env.pre-rebuild.$(date +%Y%m%d-%H%M%S)"
+  cp -f "$PREV_ENV_PATH" "$PREV_ENV_BACKUP" >/dev/null 2>&1 || PREV_ENV_BACKUP=""
+fi
+
+log "removing zeroclaw and old openclaw data (mode=$REBUILD_MODE preserve_config=$PRESERVE_CONFIG preserve_state=$PRESERVE_STATE)"
 rm -f "$PREFIX/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" >/dev/null 2>&1 || true
 rm -rf \
   "$HOME/.zeroclaw" \
   "$HOME/zeroclaw" \
-  "$HOME/.openclaw" \
   "$HOME/openclaw" \
-  "$HOME/openclaw-logs" \
   "$HOME/openclaw-install.sh" \
   "$HOME/.zeroclaw_daemon.log" \
   "$HOME/.openclaw_daemon.log"
+if is_true_flag "$PRESERVE_STATE"; then
+  mkdir -p "$HOME/.openclaw" "$HOME/openclaw-logs"
+else
+  rm -rf "$HOME/.openclaw" "$HOME/openclaw-logs"
+fi
 if [ "$SKIP_WATCHDOG" != "1" ]; then
-  rm -rf "$HOME/.openclaw-watchdog"
+  if ! is_true_flag "$PRESERVE_STATE"; then
+    rm -rf "$HOME/.openclaw-watchdog"
+  fi
 fi
 
 mkdir -p "$HOME/.termux/boot"
@@ -97,13 +127,32 @@ fi
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 NVIDIA_API_KEY="${NVIDIA_API_KEY:-}"
-TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-6002298888}"
-OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(date +%s | sha256sum | cut -c1-24)}"
+TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-}"
+OPENCLAW_PORT="${OPENCLAW_PORT:-}"
+OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
 OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$REPO_DIR}"
 CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
 OBSIDIAN_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-obsidian-integrate.sh"
 UPDATE_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-main-system-update.sh"
+
+if [ -z "$TELEGRAM_BOT_TOKEN" ] && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_CFG_BACKUP" ]; then
+  TELEGRAM_BOT_TOKEN="$(jq -r '.channels.telegram.botToken // empty' "$PREV_CFG_BACKUP" 2>/dev/null || true)"
+fi
+if [ -z "$NVIDIA_API_KEY" ] && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_CFG_BACKUP" ]; then
+  NVIDIA_API_KEY="$(jq -r '.models.providers.nvidia.apiKey // empty' "$PREV_CFG_BACKUP" 2>/dev/null || true)"
+fi
+if [ -z "${TELEGRAM_OWNER_ID:-}" ] && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_CFG_BACKUP" ]; then
+  TELEGRAM_OWNER_ID="$(jq -r '.channels.telegram.allowFrom[0] // empty' "$PREV_CFG_BACKUP" 2>/dev/null || true)"
+fi
+if [ -z "${OPENCLAW_PORT:-}" ] && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_CFG_BACKUP" ]; then
+  OPENCLAW_PORT="$(jq -r '.gateway.port // empty' "$PREV_CFG_BACKUP" 2>/dev/null || true)"
+fi
+if [ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ] && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_CFG_BACKUP" ]; then
+  OPENCLAW_GATEWAY_TOKEN="$(jq -r '.gateway.auth.token // empty' "$PREV_CFG_BACKUP" 2>/dev/null || true)"
+fi
+TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-6002298888}"
+OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
+OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(date +%s | sha256sum | cut -c1-24)}"
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
   log "TELEGRAM_BOT_TOKEN is required"
@@ -120,7 +169,9 @@ fi
 
 mkdir -p "$HOME/.openclaw" "$HOME/openclaw-logs"
 
-log "writing ~/.openclaw/openclaw.json"
+log "writing ~/.openclaw/openclaw.json (full restore mode)"
+BASE_CFG_TMP="$(mktemp)"
+FINAL_CFG_TMP="$(mktemp)"
 jq -n \
   --arg gatewayToken "$OPENCLAW_GATEWAY_TOKEN" \
   --argjson gatewayPort "$OPENCLAW_PORT" \
@@ -199,7 +250,76 @@ jq -n \
         groups: {}
       }
     }
-  }' >"$HOME/.openclaw/openclaw.json"
+  }' >"$BASE_CFG_TMP"
+
+if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_CFG_BACKUP" ] && jq -e . "$PREV_CFG_BACKUP" >/dev/null 2>&1; then
+  log "merging preserved runtime config into rebuilt base config"
+  jq -s \
+    --arg gatewayToken "$OPENCLAW_GATEWAY_TOKEN" \
+    --argjson gatewayPort "$OPENCLAW_PORT" \
+    --arg telegramToken "$TELEGRAM_BOT_TOKEN" \
+    --arg telegramOwner "$TELEGRAM_OWNER_ID" \
+    --arg nvidiaKey "$NVIDIA_API_KEY" \
+    '
+      .[0] * .[1]
+      | .gateway = (.gateway // {})
+      | .gateway.mode = (.gateway.mode // "local")
+      | .gateway.bind = (.gateway.bind // "lan")
+      | .gateway.port = $gatewayPort
+      | .gateway.auth = (.gateway.auth // {})
+      | if ((.gateway.auth.mode // "none") == "none") or ((.gateway.auth.mode // "") == "") then
+          .gateway.auth.mode = "token" | .gateway.auth.token = $gatewayToken
+        elif (.gateway.auth.mode == "token") and ((.gateway.auth.token // "") == "") then
+          .gateway.auth.token = $gatewayToken
+        else
+          .
+        end
+      | .channels = (.channels // {})
+      | .channels.telegram = (.channels.telegram // {})
+      | .channels.telegram.enabled = true
+      | .channels.telegram.botToken = (if ($telegramToken | length) > 0 then $telegramToken else (.channels.telegram.botToken // "") end)
+      | .channels.telegram.dmPolicy = "allowlist"
+      | .channels.telegram.allowFrom = [$telegramOwner]
+      | .channels.telegram.groupPolicy = "disabled"
+      | .channels.telegram.groups = (.channels.telegram.groups // {})
+      | .plugins = (.plugins // {})
+      | .plugins.entries = (.plugins.entries // {})
+      | .plugins.entries.telegram = (.plugins.entries.telegram // {})
+      | .plugins.entries.telegram.enabled = true
+      | .models = (.models // {})
+      | .models.providers = (.models.providers // {})
+      | .models.providers.nvidia = (.models.providers.nvidia // {})
+      | .models.providers.nvidia.api = (.models.providers.nvidia.api // "openai-completions")
+      | .models.providers.nvidia.baseUrl = (.models.providers.nvidia.baseUrl // "https://integrate.api.nvidia.com/v1")
+      | if ($nvidiaKey | length) > 0 then .models.providers.nvidia.apiKey = $nvidiaKey else . end
+      | .agents = (.agents // {})
+      | .agents.defaults = (.agents.defaults // {})
+      | .agents.defaults.model = (.agents.defaults.model // {})
+      | if ((.agents.defaults.model.primary // "") | length) == 0 then
+          .agents.defaults.model.primary = "nvidia/z-ai/glm4.7"
+        else
+          .
+        end
+      | if ((.agents.defaults.model.fallbacks // []) | length) == 0 then
+          .agents.defaults.model.fallbacks = [
+            "nvidia/moonshotai/kimi-k2.5",
+            "nvidia/openai/gpt-oss-120b",
+            "nvidia/nvidia/llama-3.1-nemotron-70b-instruct"
+          ]
+        else
+          .
+        end
+    ' "$BASE_CFG_TMP" "$PREV_CFG_BACKUP" >"$FINAL_CFG_TMP"
+else
+  cp -f "$BASE_CFG_TMP" "$FINAL_CFG_TMP"
+fi
+
+if [ -f "$HOME/.openclaw/openclaw.json" ]; then
+  cp -f "$HOME/.openclaw/openclaw.json" "$HOME/.openclaw/openclaw.json.bak.rebuild.$(date +%Y%m%d-%H%M%S)" >/dev/null 2>&1 || true
+fi
+mv "$FINAL_CFG_TMP" "$HOME/.openclaw/openclaw.json"
+chmod 600 "$HOME/.openclaw/openclaw.json"
+rm -f "$BASE_CFG_TMP"
 
 if [ "$OPENCLAW_TERMUX_REPO_DIR" != "$HOME/DINO_OPENCLAW" ]; then
   ln -sfn "$OPENCLAW_TERMUX_REPO_DIR" "$HOME/DINO_OPENCLAW"
