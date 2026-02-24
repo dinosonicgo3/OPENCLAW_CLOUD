@@ -11,6 +11,7 @@
 - `docs/termux-main-system-update-policy.md`: 主系統更新規範
 - `docs/termux-watchdog.md`: 看門狗與握手協議
 - `docs/termux-obsidian.md`: Obsidian 整合說明
+- `docs/termux-repair-flow.md`: 手機端核心修復流程（防遺失）
 
 ## 目標
 

@@ -4,6 +4,8 @@ set -euo pipefail
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 CFG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME_DIR/.openclaw/openclaw.json}"
 LOG_FILE="${OPENCLAW_CORE_GUARD_LOG:-$HOME_DIR/openclaw-logs/core-guard.log}"
+EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
+EMBEDDING_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
 
 mkdir -p "$(dirname "$CFG_FILE")" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -47,6 +49,9 @@ is_safe() {
     | (.gateway // {} | .auth // {} | .password // "") as $password
     | (.gateway // {} | .controlUi // {} | .dangerouslyAllowHostHeaderOriginFallback // false) as $uiFallback
     | (.gateway // {} | .port) as $port
+    | (.agents // {} | .defaults // {} | .memorySearch // {} | .provider // "") as $memProvider
+    | (.agents // {} | .defaults // {} | .memorySearch // {} | .local // {} | .modelPath // "") as $memModelPath
+    | (.agents // {} | .defaults // {} | .memorySearch // {} | .local // {} | .modelCacheDir // "") as $memModelCacheDir
     | (($port | tonumber?) != null)
     and (
       ($bind != "lan")
@@ -58,6 +63,9 @@ is_safe() {
         )
       )
     )
+    and ($memProvider == "local")
+    and (($memModelPath | length) > 0)
+    and (($memModelCacheDir | length) > 0)
   ' "$CFG_FILE" >/dev/null 2>&1
 }
 
@@ -83,6 +91,8 @@ fix_config() {
   jq \
     --arg token "$token" \
     --argjson fallbackPort "$fallback_port" \
+    --arg embeddingModel "$EMBEDDING_MODEL_REF" \
+    --arg embeddingCacheDir "$EMBEDDING_MODEL_CACHE_DIR" \
     '
       .gateway = (.gateway // {}) |
       .gateway.mode = (.gateway.mode // "local") |
@@ -105,7 +115,16 @@ fix_config() {
         end
       else
         .
-      end
+      end |
+      .agents = (.agents // {}) |
+      .agents.defaults = (.agents.defaults // {}) |
+      .agents.defaults.memorySearch = (.agents.defaults.memorySearch // {}) |
+      .agents.defaults.memorySearch.provider = "local" |
+      .agents.defaults.memorySearch.fallback = "none" |
+      .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {}) |
+      .agents.defaults.memorySearch.local.modelPath = $embeddingModel |
+      .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir |
+      del(.agents.defaults.memorySearch.remote)
     ' "$CFG_FILE" >"$tmp"
   after="$(tmp_sha "$tmp")"
   if [ "$before" != "$after" ]; then
