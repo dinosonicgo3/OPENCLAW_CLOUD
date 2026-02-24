@@ -121,10 +121,15 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 
 log "installing openclaw latest non-stable build"
 if npm view openclaw@dev version >/dev/null 2>&1; then
-  npm install -g openclaw@dev
-  OPENCLAW_CHANNEL="dev"
+  if npm install -g openclaw@dev --ignore-scripts --no-audit --no-fund; then
+    OPENCLAW_CHANNEL="dev"
+  else
+    log "openclaw@dev install failed; fallback to latest"
+    npm install -g openclaw@latest --ignore-scripts --no-audit --no-fund
+    OPENCLAW_CHANNEL="latest"
+  fi
 else
-  npm install -g openclaw@latest
+  npm install -g openclaw@latest --ignore-scripts --no-audit --no-fund
   OPENCLAW_CHANNEL="latest"
 fi
 
