@@ -50,6 +50,7 @@ If `NANOBOT_TELEGRAM_BOT_TOKEN` is empty, nanobot is written but disabled.
 - `/fix` or `/repair` - fix/restart path
 - `/model` - current nanobot model
 - plain text - short reply via NVIDIA model (rescue-focused)
+- natural rescue text - e.g. `OpenClaw 掛了，請直接修復` will trigger repair playbook.
 
 ## Local commands
 

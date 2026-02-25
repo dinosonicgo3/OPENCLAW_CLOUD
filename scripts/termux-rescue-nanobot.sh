@@ -34,6 +34,8 @@ NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-900}"
 RESCUE_ACTION="watchdog_rescue"
 RESCUE_REASON="default-policy"
 MODEL_REPLY=""
+NATURAL_INTENT="chat"
+NATURAL_REASON="natural-chat"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -240,6 +242,79 @@ model_chat_reply() {
   fi
 }
 
+classify_natural_intent() {
+  local user_text="$1" text_norm payload resp content
+  NATURAL_INTENT="chat"
+  NATURAL_REASON="natural-chat"
+
+  text_norm="$(printf '%s' "$user_text" | tr '[:upper:]' '[:lower:]')"
+  if printf '%s' "$text_norm" | grep -Eiq '救援|修復|修好|修正|除錯|排錯|回滾|復原|掛了|當機|故障|失聯|沒反應|crash|broken|fix|repair|rescue'; then
+    NATURAL_INTENT="repair"
+    NATURAL_REASON="keyword-repair"
+    return 0
+  fi
+  if printf '%s' "$text_norm" | grep -Eiq '狀態|健康|還在嗎|有沒有運作|運作嗎|在線|online|health|status'; then
+    NATURAL_INTENT="status"
+    NATURAL_REASON="keyword-status"
+    return 0
+  fi
+
+  if [ -z "$NVIDIA_API_KEY" ]; then
+    return 0
+  fi
+
+  payload="$(jq -n --arg model "$NANOBOT_MODEL" --arg text "$user_text" '
+    {
+      model: $model,
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: "Classify user intent for rescue bot. Return strict JSON only."
+        },
+        {
+          role: "user",
+          content: ("Text: " + $text + "\nClassify into intent: repair|status|chat.")
+        }
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "intent_result",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              intent: {
+                type: "string",
+                enum: ["repair","status","chat"]
+              },
+              reason: { type: "string" }
+            },
+            required: ["intent","reason"]
+          }
+        }
+      }
+    }')"
+
+  resp="$(curl -fsS --max-time 20 \
+    -X POST "${NANOBOT_BASE_URL}/chat/completions" \
+    -H "Authorization: Bearer ${NVIDIA_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null || true)"
+  content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
+  if [ -n "$content" ]; then
+    NATURAL_INTENT="$(printf '%s' "$content" | jq -r 'try (fromjson.intent) catch .intent // "chat"' 2>/dev/null || echo chat)"
+    NATURAL_REASON="$(printf '%s' "$content" | jq -r 'try (fromjson.reason) catch .reason // "model-intent"' 2>/dev/null || echo model-intent)"
+  fi
+
+  case "$NATURAL_INTENT" in
+    repair|status|chat) ;;
+    *) NATURAL_INTENT="chat"; NATURAL_REASON="invalid-intent-fallback" ;;
+  esac
+}
+
 watchdog_maintenance_active() {
   local wd_state
   wd_state="$HOME_DIR/.openclaw-watchdog/state.json"
@@ -333,8 +408,23 @@ handle_command() {
       send_telegram "🦀 潤天蟹模型：${NANOBOT_MODEL}"
       ;;
     *)
-      model_chat_reply "$text"
-      send_telegram "$MODEL_REPLY"
+      classify_natural_intent "$text"
+      case "$NATURAL_INTENT" in
+        repair)
+          run_repair_playbook "natural:${NATURAL_REASON}"
+          ;;
+        status)
+          if openclaw_healthy; then
+            send_telegram "🦀 潤天蟹：OpenClaw healthy（natural-intent）。"
+          else
+            send_telegram "🦀 潤天蟹：OpenClaw unhealthy（natural-intent），建議我直接修復。"
+          fi
+          ;;
+        chat|*)
+          model_chat_reply "$text"
+          send_telegram "$MODEL_REPLY"
+          ;;
+      esac
       ;;
   esac
 }
