@@ -261,7 +261,7 @@ jq -n \
           },
           query: {
             hybrid: {
-              enabled: false,
+              enabled: true,
               vectorWeight: 0,
               textWeight: 1
             }
@@ -360,7 +360,7 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
       | .agents.defaults.memorySearch.store.vector.enabled = false
       | .agents.defaults.memorySearch.query = (.agents.defaults.memorySearch.query // {})
       | .agents.defaults.memorySearch.query.hybrid = (.agents.defaults.memorySearch.query.hybrid // {})
-      | .agents.defaults.memorySearch.query.hybrid.enabled = false
+      | .agents.defaults.memorySearch.query.hybrid.enabled = true
       | .agents.defaults.memorySearch.query.hybrid.vectorWeight = 0
       | .agents.defaults.memorySearch.query.hybrid.textWeight = 1
       | del(.agents.defaults.memorySearch.remote)

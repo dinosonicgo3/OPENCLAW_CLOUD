@@ -256,7 +256,7 @@ ensure_local_memory_config() {
     .agents.defaults.memorySearch.store.vector.enabled = false |
     .agents.defaults.memorySearch.query = (.agents.defaults.memorySearch.query // {}) |
     .agents.defaults.memorySearch.query.hybrid = (.agents.defaults.memorySearch.query.hybrid // {}) |
-    .agents.defaults.memorySearch.query.hybrid.enabled = false |
+    .agents.defaults.memorySearch.query.hybrid.enabled = true |
     .agents.defaults.memorySearch.query.hybrid.vectorWeight = 0 |
     .agents.defaults.memorySearch.query.hybrid.textWeight = 1 |
     del(.agents.defaults.memorySearch.remote)
