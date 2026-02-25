@@ -557,6 +557,7 @@ Usage:
   termux-rescue-nanobot.sh --once
   termux-rescue-nanobot.sh --status
   termux-rescue-nanobot.sh --rescue <reason>
+  termux-rescue-nanobot.sh --simulate-text "<text>"
 EOF
 }
 
@@ -575,6 +576,10 @@ case "${1:---daemon}" in
   --rescue)
     state_init
     run_rescue "${2:-manual}"
+    ;;
+  --simulate-text)
+    state_init
+    handle_command "${2:-}"
     ;;
   -h|--help)
     usage
