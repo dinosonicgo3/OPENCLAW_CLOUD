@@ -362,25 +362,26 @@ run_repair_playbook() {
   local reason="$1" now
   now="$(date +%s)"
   log "repair playbook start: reason=${reason}"
+  send_telegram "🦀 潤天蟹：收到修復請求，開始執行修復流程。原因：${reason}"
 
   if [ -x "$CORE_GUARD_SCRIPT" ]; then
     "$CORE_GUARD_SCRIPT" --fix >>"$LOG_FILE" 2>&1 || true
   fi
 
   if restart_openclaw; then
-    send_telegram "🦀 潤天蟹：修復成功（core-guard + restart）。原因：${reason}"
+    send_telegram "✅ 潤天蟹修復完成：core-guard + restart 成功。原因：${reason}"
     state_set ".last_action_ts=${now} | .last_action=\"coreguard_restart\" | .last_reason=\"${reason}\" | .consecutive_health_failures=0"
     return 0
   fi
 
   if [ -x "$WATCHDOG_SCRIPT" ]; then
     "$WATCHDOG_SCRIPT" --rescue "nanobot:${reason}" >>"$LOG_FILE" 2>&1 || true
-    send_telegram "🦀 潤天蟹：本地修復失敗，已升級為 watchdog rescue。原因：${reason}"
+    send_telegram "⚠️ 潤天蟹修復結束：本地修復失敗，已升級為 watchdog rescue。原因：${reason}"
     state_set ".last_action_ts=${now} | .last_action=\"watchdog_rescue\" | .last_reason=\"${reason}\""
     return 0
   fi
 
-  send_telegram "🦀 潤天蟹：修復失敗，且 watchdog 腳本不可用。原因：${reason}"
+  send_telegram "❌ 潤天蟹修復失敗：watchdog 腳本不可用。原因：${reason}"
   state_set ".last_action_ts=${now} | .last_action=\"repair_failed\" | .last_reason=\"${reason}\""
   return 1
 }
