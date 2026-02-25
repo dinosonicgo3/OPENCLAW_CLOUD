@@ -31,6 +31,9 @@ AUTO_RESCUE_ON_UNHEALTHY="${AUTO_RESCUE_ON_UNHEALTHY:-1}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-600}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-3}"
 NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-900}"
+RESCUE_ACTION="watchdog_rescue"
+RESCUE_REASON="default-policy"
+MODEL_REPLY=""
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -126,12 +129,13 @@ restart_openclaw() {
 }
 
 structured_rescue_action() {
-  local health_state prompt payload resp content action reason
-  action="watchdog_rescue"
-  reason="default-policy"
+  local health_state prompt payload resp content
+  RESCUE_ACTION="watchdog_rescue"
+  RESCUE_REASON="default-policy"
 
   if [ -z "$NVIDIA_API_KEY" ]; then
-    printf '%s\t%s\n' "$action" "$reason"
+    RESCUE_ACTION="watchdog_rescue"
+    RESCUE_REASON="default-policy"
     return 0
   fi
 
@@ -190,22 +194,20 @@ Return only JSON object with keys: action, reason."
 
   content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
   if [ -n "$content" ]; then
-    action="$(printf '%s' "$content" | jq -r 'try (fromjson.action) catch .action // "watchdog_rescue"' 2>/dev/null || echo watchdog_rescue)"
-    reason="$(printf '%s' "$content" | jq -r 'try (fromjson.reason) catch .reason // "model-empty-reason"' 2>/dev/null || echo model-parse-failed)"
+    RESCUE_ACTION="$(printf '%s' "$content" | jq -r 'try (fromjson.action) catch .action // "watchdog_rescue"' 2>/dev/null || echo watchdog_rescue)"
+    RESCUE_REASON="$(printf '%s' "$content" | jq -r 'try (fromjson.reason) catch .reason // "model-empty-reason"' 2>/dev/null || echo model-parse-failed)"
   fi
 
-  case "$action" in
+  case "$RESCUE_ACTION" in
     none|coreguard_restart|watchdog_rescue) ;;
-    *) action="watchdog_rescue"; reason="invalid-action-fallback" ;;
+    *) RESCUE_ACTION="watchdog_rescue"; RESCUE_REASON="invalid-action-fallback" ;;
   esac
-
-  printf '%s\t%s\n' "$action" "$reason"
 }
 
 model_chat_reply() {
   local user_text="$1" payload resp content
   if [ -z "$NVIDIA_API_KEY" ]; then
-    printf '%s' "🦀 潤天蟹：我只負責救援修復。可用 /status、/rescue、/fix、/model。"
+    MODEL_REPLY="🦀 潤天蟹：我只負責救援修復。可用 /status、/rescue、/fix、/model。"
     return 0
   fi
 
@@ -232,9 +234,9 @@ model_chat_reply() {
     -d "$payload" 2>/dev/null || true)"
   content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
   if [ -z "$content" ]; then
-    printf '%s' "🦀 潤天蟹：收到。可直接用 /status 或 /rescue。"
+    MODEL_REPLY="🦀 潤天蟹：收到。可直接用 /status 或 /rescue。"
   else
-    printf '%s' "$content"
+    MODEL_REPLY="$content"
   fi
 }
 
@@ -246,14 +248,12 @@ watchdog_maintenance_active() {
 }
 
 run_rescue() {
-  local reason="$1" pair action plan_reason now
+  local reason="$1" now
   now="$(date +%s)"
-  pair="$(structured_rescue_action)"
-  action="$(printf '%s' "$pair" | awk -F'\t' '{print $1}')"
-  plan_reason="$(printf '%s' "$pair" | awk -F'\t' '{print $2}')"
-  log "rescue requested: reason=${reason}, action=${action}, plan_reason=${plan_reason}"
+  structured_rescue_action
+  log "rescue requested: reason=${reason}, action=${RESCUE_ACTION}, plan_reason=${RESCUE_REASON}"
 
-  case "$action" in
+  case "$RESCUE_ACTION" in
     none)
       send_telegram "🦀 潤天蟹：偵測到事件（${reason}），模型判定暫不執行修復。"
       ;;
@@ -280,7 +280,7 @@ run_rescue() {
       ;;
   esac
 
-  state_set ".last_action_ts=${now} | .last_action=\"${action}\" | .last_reason=\"${reason}\""
+  state_set ".last_action_ts=${now} | .last_action=\"${RESCUE_ACTION}\" | .last_reason=\"${reason}\""
 }
 
 run_repair_playbook() {
@@ -311,7 +311,7 @@ run_repair_playbook() {
 }
 
 handle_command() {
-  local text="$1" reply
+  local text="$1"
   case "$text" in
     "/status"|"/status@"*)
       if openclaw_healthy; then
@@ -333,8 +333,8 @@ handle_command() {
       send_telegram "🦀 潤天蟹模型：${NANOBOT_MODEL}"
       ;;
     *)
-      reply="$(model_chat_reply "$text")"
-      send_telegram "$reply"
+      model_chat_reply "$text"
+      send_telegram "$MODEL_REPLY"
       ;;
   esac
 }
