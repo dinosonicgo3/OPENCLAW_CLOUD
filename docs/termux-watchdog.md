@@ -6,6 +6,10 @@ This watchdog runs independently from OpenClaw and is started with phone boot.
 
 - Optional Telegram command polling every 3 minutes (disabled by default to avoid bot conflicts with main OpenClaw service).
 - Runs OpenClaw health checks every 30 minutes.
+- Every 30 minutes performs a watchdog handshake:
+  - checks OpenClaw heartbeat file freshness (`~/.openclaw-watchdog/openclaw-heartbeat.json`)
+  - checks `openclaw health --json`
+  - if handshake fails and reaches threshold, watchdog triggers rescue rollback.
 - Runs `termux-openclaw-core-guard.sh --fix` before health checks to auto-heal dangerous gateway auth drift.
 - Enforces model policy:
   - removes forbidden fallback `zai/glm-5` family refs,
@@ -70,6 +74,7 @@ WATCHDOG_TELEGRAM_BOT_TOKEN="<dedicated_watchdog_bot_token>"
 - Main update script: `scripts/termux-main-system-update.sh`
 - Env config: `~/.openclaw-watchdog.env`
 - State file: `~/.openclaw-watchdog/state.json`
+- Heartbeat file: `~/.openclaw-watchdog/openclaw-heartbeat.json`
 - Log file: `~/openclaw-logs/watchdog.log`
 - Boot launchers:
   - `~/.termux/boot/openclaw-watchdog-launch.sh`

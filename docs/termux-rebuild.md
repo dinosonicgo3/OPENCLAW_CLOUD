@@ -29,6 +29,7 @@ Optional:
 export TELEGRAM_OWNER_ID='6002298888'
 export OPENCLAW_GATEWAY_TOKEN='your_gateway_token'
 export OPENCLAW_PORT='18789'
+export OPENCLAW_NPM_TARGET='2026.2.24'   # optional pin, default latest stable
 ```
 
 ## 3) Run one command
@@ -36,6 +37,15 @@ export OPENCLAW_PORT='18789'
 ```bash
 bash scripts/termux-rebuild-openclaw.sh
 ```
+
+Notes:
+
+- Rebuild now defaults to **stable latest** (`openclaw@latest`), not `@dev`.
+- To force a specific release, set `OPENCLAW_NPM_TARGET`.
+- Auto-compaction baseline is written into `openclaw.json`:
+  - `agents.defaults.compaction.mode=safeguard`
+  - `reserveTokensFloor=20000`
+  - `memoryFlush.enabled=true`
 
 ## 4) Daily commands
 

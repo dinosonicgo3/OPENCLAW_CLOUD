@@ -2,11 +2,12 @@
 set -euo pipefail
 
 WATCHDOG_NAME="openclaw-watchdog"
-WATCHDOG_VERSION="1.7.2"
+WATCHDOG_VERSION="1.8.0"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 STATE_DIR="${OPENCLAW_WATCHDOG_STATE_DIR:-$HOME_DIR/.openclaw-watchdog}"
 STATE_FILE="$STATE_DIR/state.json"
+HEARTBEAT_FILE="$STATE_DIR/openclaw-heartbeat.json"
 MANIFEST_FILE="$STATE_DIR/critical-manifest.json"
 LOG_FILE="${OPENCLAW_WATCHDOG_LOG:-$HOME_DIR/openclaw-logs/watchdog.log}"
 ENV_FILE="${OPENCLAW_WATCHDOG_ENV:-$HOME_DIR/.openclaw-watchdog.env}"
@@ -35,9 +36,16 @@ DRIFT_AUTO_BASELINE_IF_HEALTHY="${DRIFT_AUTO_BASELINE_IF_HEALTHY:-1}"
 SELFCHECK_INTERVAL_SECONDS="${SELFCHECK_INTERVAL_SECONDS:-1800}"
 SELFCHECK_ALERT_COOLDOWN_SECONDS="${SELFCHECK_ALERT_COOLDOWN_SECONDS:-3600}"
 SELFCHECK_MEMORY_INDEX_GRACE_SECONDS="${SELFCHECK_MEMORY_INDEX_GRACE_SECONDS:-21600}"
+HANDSHAKE_INTERVAL_SECONDS="${HANDSHAKE_INTERVAL_SECONDS:-1800}"
+HANDSHAKE_TIMEOUT_SECONDS="${HANDSHAKE_TIMEOUT_SECONDS:-45}"
+HANDSHAKE_STALE_SECONDS="${HANDSHAKE_STALE_SECONDS:-900}"
+HANDSHAKE_FAIL_THRESHOLD="${HANDSHAKE_FAIL_THRESHOLD:-1}"
 SELF_CHECK_ENFORCE_LOCAL_MEMORY="${SELF_CHECK_ENFORCE_LOCAL_MEMORY:-1}"
 OPENCLAW_MEMORY_EMBEDDING_MODEL="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-}"
 OPENCLAW_MEMORY_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
+OPENCLAW_COMPACTION_RESERVE_TOKENS="${OPENCLAW_COMPACTION_RESERVE_TOKENS:-20000}"
+OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS="${OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS:-4000}"
+OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT="${OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT:-Write any lasting notes, rules, facts or preferences to memory/YYYY-MM-DD.md or MEMORY.md. Reply NO_REPLY if nothing to store.}"
 
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -104,6 +112,13 @@ state_init() {
     "last_run_ts": 0,
     "last_alert_ts": 0,
     "last_alert_sig": ""
+  },
+  "handshake": {
+    "last_attempt_ts": 0,
+    "last_ok_ts": 0,
+    "last_fail_ts": 0,
+    "consecutive_failures": 0,
+    "last_reason": ""
   }
 }
 EOF
@@ -148,7 +163,13 @@ state_migrate() {
     .selfcheck = (.selfcheck // {}) |
     .selfcheck.last_run_ts = (.selfcheck.last_run_ts // 0) |
     .selfcheck.last_alert_ts = (.selfcheck.last_alert_ts // 0) |
-    .selfcheck.last_alert_sig = (.selfcheck.last_alert_sig // "")
+    .selfcheck.last_alert_sig = (.selfcheck.last_alert_sig // "") |
+    .handshake = (.handshake // {}) |
+    .handshake.last_attempt_ts = (.handshake.last_attempt_ts // 0) |
+    .handshake.last_ok_ts = (.handshake.last_ok_ts // 0) |
+    .handshake.last_fail_ts = (.handshake.last_fail_ts // 0) |
+    .handshake.consecutive_failures = (.handshake.consecutive_failures // 0) |
+    .handshake.last_reason = (.handshake.last_reason // "")
   ' "$STATE_FILE" >"$tmp"
   mv "$tmp" "$STATE_FILE"
 }
@@ -238,6 +259,9 @@ ensure_local_memory_config() {
   if ! jq \
     --arg embeddingModel "$OPENCLAW_MEMORY_EMBEDDING_MODEL" \
     --arg embeddingCacheDir "$OPENCLAW_MEMORY_MODEL_CACHE_DIR" \
+    --argjson compactionReserve "$OPENCLAW_COMPACTION_RESERVE_TOKENS" \
+    --argjson compactionSoft "$OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS" \
+    --arg compactionPrompt "$OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT" \
     '
     .agents = (.agents // {}) |
     .agents.defaults = (.agents.defaults // {}) |
@@ -259,6 +283,21 @@ ensure_local_memory_config() {
     .agents.defaults.memorySearch.query.hybrid.enabled = true |
     .agents.defaults.memorySearch.query.hybrid.vectorWeight = 0 |
     .agents.defaults.memorySearch.query.hybrid.textWeight = 1 |
+    .agents.defaults.compaction = (.agents.defaults.compaction // {}) |
+    .agents.defaults.compaction.mode = "safeguard" |
+    .agents.defaults.compaction.reserveTokensFloor = ((.agents.defaults.compaction.reserveTokensFloor | tonumber?) // $compactionReserve) |
+    .agents.defaults.compaction.memoryFlush = (.agents.defaults.compaction.memoryFlush // {}) |
+    .agents.defaults.compaction.memoryFlush.enabled = true |
+    .agents.defaults.compaction.memoryFlush.softThresholdTokens = ((.agents.defaults.compaction.memoryFlush.softThresholdTokens | tonumber?) // $compactionSoft) |
+    .agents.defaults.compaction.memoryFlush.prompt = (
+      if ((.agents.defaults.compaction.memoryFlush.prompt // "") | length) > 0
+      then .agents.defaults.compaction.memoryFlush.prompt
+      else $compactionPrompt
+      end
+    ) |
+    del(.agents.defaults.compaction.keepRecentTokens) |
+    del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens) |
+    del(.channels.telegram.dmToken) |
     del(.agents.defaults.memorySearch.remote)
   ' "$cfg" >"$tmp"; then
     rm -f "$tmp"
@@ -358,6 +397,18 @@ run_full_selfcheck() {
     fi
     if jq -e '.agents.defaults.memorySearch.remote.apiKey? | strings | length > 0' "$cfg" >/dev/null 2>&1; then
       issues+=("memorySearch.remote.apiKey 仍存在（應移除以避免雲端同步）。")
+    fi
+    if jq -e '.agents.defaults.compaction.memoryFlush.hardThresholdTokens? != null' "$cfg" >/dev/null 2>&1; then
+      issues+=("compaction.memoryFlush.hardThresholdTokens 為無效欄位。")
+    fi
+    if jq -e '.agents.defaults.compaction.keepRecentTokens? != null' "$cfg" >/dev/null 2>&1; then
+      issues+=("compaction.keepRecentTokens 為無效欄位。")
+    fi
+    if jq -e '.channels.telegram.dmToken? != null' "$cfg" >/dev/null 2>&1; then
+      issues+=("channels.telegram.dmToken 為無效欄位。")
+    fi
+    if [ "$(jq -r '.agents.defaults.compaction.mode // "unset"' "$cfg" 2>/dev/null || echo unset)" != "safeguard" ]; then
+      issues+=("compaction.mode 非 safeguard。")
     fi
 
     workspace_path="$(jq -r '.agents.defaults.workspace // empty' "$cfg" 2>/dev/null || true)"
@@ -844,6 +895,50 @@ PY
   return 0
 }
 
+heartbeat_fresh() {
+  local now hb_ts
+  [ -f "$HEARTBEAT_FILE" ] || return 1
+  hb_ts="$(jq -r '.ts // 0' "$HEARTBEAT_FILE" 2>/dev/null || echo 0)"
+  if ! printf '%s' "$hb_ts" | grep -Eq '^[0-9]+$'; then
+    return 1
+  fi
+  now="$(date +%s)"
+  [ "$((now - hb_ts))" -le "$HANDSHAKE_STALE_SECONDS" ]
+}
+
+perform_watchdog_handshake() {
+  local now resp ok fail_count reason
+  now="$(date +%s)"
+  state_set ".handshake.last_attempt_ts=${now}"
+
+  if ! heartbeat_fresh; then
+    reason="heartbeat-stale"
+    fail_count="$(state_get '.handshake.consecutive_failures // 0')"
+    fail_count="$((fail_count + 1))"
+    state_set ".handshake.last_fail_ts=${now} | .handshake.consecutive_failures=${fail_count} | .handshake.last_reason=\"${reason}\""
+    log "watchdog handshake failed: ${reason} (${fail_count}/${HANDSHAKE_FAIL_THRESHOLD})"
+    return 1
+  fi
+
+  if command -v timeout >/dev/null 2>&1; then
+    resp="$(timeout "$HANDSHAKE_TIMEOUT_SECONDS" openclaw health --json --timeout 12000 2>/dev/null || true)"
+  else
+    resp="$(openclaw health --json --timeout 12000 2>/dev/null || true)"
+  fi
+  ok="$(printf '%s' "$resp" | jq -r '.ok // false' 2>/dev/null || echo false)"
+  if [ "$ok" != "true" ]; then
+    reason="gateway-health-failed"
+    fail_count="$(state_get '.handshake.consecutive_failures // 0')"
+    fail_count="$((fail_count + 1))"
+    state_set ".handshake.last_fail_ts=${now} | .handshake.consecutive_failures=${fail_count} | .handshake.last_reason=\"${reason}\""
+    log "watchdog handshake failed: ${reason} (${fail_count}/${HANDSHAKE_FAIL_THRESHOLD})"
+    return 1
+  fi
+
+  state_set ".handshake.last_ok_ts=${now} | .handshake.consecutive_failures=0 | .handshake.last_reason=\"\""
+  return 0
+}
+
 resolve_stable_tag() {
   git -C "$REPO_DIR" fetch --all --tags --prune >/dev/null 2>&1 || true
   git -C "$REPO_DIR" tag -l '穩定版*' --sort=-creatordate | head -n1
@@ -1025,6 +1120,7 @@ poll_telegram_updates() {
 
 monitor_once() {
   local now active deadline last_monitor guard_result drift_path fail_count maintenance_started auto_close
+  local last_handshake hs_fail_count hs_reason
   now="$(date +%s)"
   poll_telegram_updates
 
@@ -1057,6 +1153,22 @@ monitor_once() {
       trigger_rescue "maintenance-timeout"
     fi
     return 0
+  fi
+
+  last_handshake="$(state_get '.handshake.last_attempt_ts // 0')"
+  if [ "$((now - last_handshake))" -ge "$HANDSHAKE_INTERVAL_SECONDS" ]; then
+    if perform_watchdog_handshake; then
+      log "watchdog handshake ok"
+    else
+      hs_fail_count="$(state_get '.handshake.consecutive_failures // 0')"
+      hs_reason="$(state_get '.handshake.last_reason // "unknown"')"
+      send_telegram "⚠️ Watchdog 握手失敗：${hs_reason}（${hs_fail_count}/${HANDSHAKE_FAIL_THRESHOLD}）"
+      if [ "$hs_fail_count" -ge "$HANDSHAKE_FAIL_THRESHOLD" ]; then
+        send_telegram "🚨 Watchdog 握手連續失敗，啟動救援回滾。"
+        trigger_rescue "handshake-failed"
+        return 0
+      fi
+    fi
   fi
 
   maybe_run_full_selfcheck "$now"
@@ -1132,7 +1244,7 @@ run_daemon() {
   trap 'rm -f "$PID_FILE"' EXIT
 
   now="$(date +%s)"
-  state_set ".started_at=${now} | .last_monitor_ts=${now} | .consecutive_health_failures=0"
+  state_set ".started_at=${now} | .last_monitor_ts=${now} | .consecutive_health_failures=0 | .handshake.last_attempt_ts=${now} | .handshake.consecutive_failures=0 | .handshake.last_reason=\"\""
   guard_result="$(run_core_guard 2>/dev/null || true)"
   if [ "$guard_result" = "changed" ]; then
     send_telegram "🩹 Watchdog: 開機時修復了 OpenClaw 危險配置。"

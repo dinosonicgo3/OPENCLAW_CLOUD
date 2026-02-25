@@ -9,6 +9,7 @@
 2. `memorySearch` 必須固定為本地記憶（不走 remote）。
 3. 修復流程要能被重複執行，且不破壞 Obsidian/workspace。
 4. 修復腳本要內建於核心，避免只存在聊天紀錄。
+5. 底層修復必須使用「結構化輸出/結構化寫入」原則：只允許符合 schema 的 JSON 欄位寫入。
 
 ## 已寫入核心腳本
 
@@ -50,6 +51,16 @@ watchdog 的 self-check 也會持續校正，避免被舊配置覆蓋。
 
 並在流程中做 maintenance 握手，失敗則觸發救援。
 
+### D. 結構化修復護欄（避免 AI 修壞底層）
+
+`core-guard` / `watchdog` / `rebuild` 目前都只用 `jq` 做結構化欄位寫入，並強制移除已知危險欄位：
+
+- `.agents.defaults.compaction.keepRecentTokens`
+- `.agents.defaults.compaction.memoryFlush.hardThresholdTokens`
+- `.channels.telegram.dmToken`
+
+同時要求 compaction 核心欄位完整存在（mode/reserveTokensFloor/memoryFlush），等效於「schema gate」。
+
 ## 手動執行標準修復（必要時）
 
 ```bash
@@ -73,4 +84,3 @@ jq '.gateway,.agents.defaults.memorySearch' ~/.openclaw/openclaw.json
 1. `openclaw health` 通過
 2. `memorySearch.provider` 為 `local`
 3. `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-

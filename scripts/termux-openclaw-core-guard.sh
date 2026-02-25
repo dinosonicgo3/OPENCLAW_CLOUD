@@ -6,6 +6,9 @@ CFG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME_DIR/.openclaw/openclaw.json}"
 LOG_FILE="${OPENCLAW_CORE_GUARD_LOG:-$HOME_DIR/openclaw-logs/core-guard.log}"
 EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-}"
 EMBEDDING_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
+COMPACTION_RESERVE_TOKENS="${OPENCLAW_COMPACTION_RESERVE_TOKENS:-20000}"
+COMPACTION_MEMORY_FLUSH_SOFT_TOKENS="${OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS:-4000}"
+COMPACTION_MEMORY_FLUSH_PROMPT="${OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT:-Write any lasting notes, rules, facts or preferences to memory/YYYY-MM-DD.md or MEMORY.md. Reply NO_REPLY if nothing to store.}"
 
 mkdir -p "$(dirname "$CFG_FILE")" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -54,6 +57,11 @@ is_safe() {
     | (.agents // {} | .defaults // {} | .memorySearch // {} | .provider // "") as $memProvider
     | (.agents // {} | .defaults // {} | .memorySearch // {} | .local // {} | .modelPath // "") as $memModelPath
     | (.agents // {} | .defaults // {} | .memorySearch // {} | .local // {} | .modelCacheDir // "") as $memModelCacheDir
+    | (.agents // {} | .defaults // {} | .compaction // {} | .mode // "") as $compMode
+    | (.agents // {} | .defaults // {} | .compaction // {} | .reserveTokensFloor | tonumber?) as $compReserve
+    | (.agents // {} | .defaults // {} | .compaction // {} | .memoryFlush // {} | .enabled // false) as $flushEnabled
+    | (.agents // {} | .defaults // {} | .compaction // {} | .memoryFlush // {} | .softThresholdTokens | tonumber?) as $flushSoft
+    | (.agents // {} | .defaults // {} | .compaction // {} | .memoryFlush // {} | .prompt // "") as $flushPrompt
     | (($port | tonumber?) != null)
     and (
       ($bind != "lan")
@@ -69,6 +77,14 @@ is_safe() {
     and (($memModelPath | length) > 0)
     and ($memModelPath == $embeddingModel)
     and (($memModelCacheDir | length) > 0)
+    and ($compMode == "safeguard")
+    and ($compReserve != null)
+    and ($flushEnabled == true)
+    and ($flushSoft != null)
+    and (($flushPrompt | length) > 0)
+    and ((.agents.defaults.compaction.keepRecentTokens? | not))
+    and ((.agents.defaults.compaction.memoryFlush.hardThresholdTokens? | not))
+    and ((.channels.telegram.dmToken? | not))
   ' "$CFG_FILE" >/dev/null 2>&1
   else
     jq -e '
@@ -80,6 +96,11 @@ is_safe() {
     | (.gateway // {} | .port) as $port
     | (.agents // {} | .defaults // {} | .memorySearch // {} | .provider // "") as $memProvider
     | (.agents // {} | .defaults // {} | .memorySearch // {} | .local // {} | .modelCacheDir // "") as $memModelCacheDir
+    | (.agents // {} | .defaults // {} | .compaction // {} | .mode // "") as $compMode
+    | (.agents // {} | .defaults // {} | .compaction // {} | .reserveTokensFloor | tonumber?) as $compReserve
+    | (.agents // {} | .defaults // {} | .compaction // {} | .memoryFlush // {} | .enabled // false) as $flushEnabled
+    | (.agents // {} | .defaults // {} | .compaction // {} | .memoryFlush // {} | .softThresholdTokens | tonumber?) as $flushSoft
+    | (.agents // {} | .defaults // {} | .compaction // {} | .memoryFlush // {} | .prompt // "") as $flushPrompt
     | (($port | tonumber?) != null)
     and (
       ($bind != "lan")
@@ -93,6 +114,14 @@ is_safe() {
     )
     and ($memProvider == "local")
     and (($memModelCacheDir | length) > 0)
+    and ($compMode == "safeguard")
+    and ($compReserve != null)
+    and ($flushEnabled == true)
+    and ($flushSoft != null)
+    and (($flushPrompt | length) > 0)
+    and ((.agents.defaults.compaction.keepRecentTokens? | not))
+    and ((.agents.defaults.compaction.memoryFlush.hardThresholdTokens? | not))
+    and ((.channels.telegram.dmToken? | not))
   ' "$CFG_FILE" >/dev/null 2>&1
   fi
 }
@@ -121,6 +150,9 @@ fix_config() {
     --argjson fallbackPort "$fallback_port" \
     --arg embeddingModel "$EMBEDDING_MODEL_REF" \
     --arg embeddingCacheDir "$EMBEDDING_MODEL_CACHE_DIR" \
+    --argjson compactionReserve "$COMPACTION_RESERVE_TOKENS" \
+    --argjson compactionSoft "$COMPACTION_MEMORY_FLUSH_SOFT_TOKENS" \
+    --arg compactionPrompt "$COMPACTION_MEMORY_FLUSH_PROMPT" \
     '
       .gateway = (.gateway // {}) |
       .gateway.mode = (.gateway.mode // "local") |
@@ -156,7 +188,22 @@ fix_config() {
         del(.agents.defaults.memorySearch.local.modelPath)
       end |
       .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir |
-      del(.agents.defaults.memorySearch.remote)
+      del(.agents.defaults.memorySearch.remote) |
+      .agents.defaults.compaction = (.agents.defaults.compaction // {}) |
+      .agents.defaults.compaction.mode = "safeguard" |
+      .agents.defaults.compaction.reserveTokensFloor = ((.agents.defaults.compaction.reserveTokensFloor | tonumber?) // $compactionReserve) |
+      .agents.defaults.compaction.memoryFlush = (.agents.defaults.compaction.memoryFlush // {}) |
+      .agents.defaults.compaction.memoryFlush.enabled = true |
+      .agents.defaults.compaction.memoryFlush.softThresholdTokens = ((.agents.defaults.compaction.memoryFlush.softThresholdTokens | tonumber?) // $compactionSoft) |
+      .agents.defaults.compaction.memoryFlush.prompt = (
+        if ((.agents.defaults.compaction.memoryFlush.prompt // "") | length) > 0
+        then .agents.defaults.compaction.memoryFlush.prompt
+        else $compactionPrompt
+        end
+      ) |
+      del(.agents.defaults.compaction.keepRecentTokens) |
+      del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens) |
+      del(.channels.telegram.dmToken)
     ' "$CFG_FILE" >"$tmp"
   after="$(tmp_sha "$tmp")"
   if [ "$before" != "$after" ]; then

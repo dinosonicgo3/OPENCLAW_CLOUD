@@ -52,17 +52,24 @@ PREV_ENV_BACKUP=""
 EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-}"
 EMBEDDING_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME/.cache/openclaw/models}"
 EMBEDDING_WARMUP_ON_REBUILD="${EMBEDDING_WARMUP_ON_REBUILD:-1}"
+OPENCLAW_COMPACTION_RESERVE_TOKENS="${OPENCLAW_COMPACTION_RESERVE_TOKENS:-20000}"
+OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS="${OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS:-4000}"
+OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT="${OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT:-Write any lasting notes, rules, facts or preferences to memory/YYYY-MM-DD.md or MEMORY.md. Reply NO_REPLY if nothing to store.}"
+OPENCLAW_NPM_TARGET="${OPENCLAW_NPM_TARGET:-latest}"
+OPENCLAW_ALLOW_DEV="${OPENCLAW_ALLOW_DEV:-0}"
 
 log "stopping old claw processes"
 pkill -9 -x zeroclaw >/dev/null 2>&1 || true
 pkill -9 -f "zeroclaw daemon" >/dev/null 2>&1 || true
 pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
 pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
+pkill -9 -f "termux-rescue-nanobot.sh" >/dev/null 2>&1 || true
 if [ "$SKIP_WATCHDOG" != "1" ]; then
   pkill -9 -f "termux-openclaw-watchdog.sh" >/dev/null 2>&1 || true
 fi
 pkill -9 -x openclaw >/dev/null 2>&1 || true
 tmux kill-session -t openclaw >/dev/null 2>&1 || true
+tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
 if [ "$SKIP_WATCHDOG" != "1" ]; then
   tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
 fi
@@ -119,12 +126,15 @@ mkdir -p "$HOME/.npm-global/bin"
 npm config set prefix "$HOME/.npm-global" >/dev/null 2>&1 || true
 export PATH="$HOME/.npm-global/bin:$PATH"
 
-log "installing openclaw latest non-stable build"
-if npm view openclaw@dev version >/dev/null 2>&1; then
-  if npm install -g openclaw@dev --ignore-scripts --no-audit --no-fund; then
+log "installing openclaw target build"
+if [ "$OPENCLAW_NPM_TARGET" != "latest" ]; then
+  npm install -g "openclaw@${OPENCLAW_NPM_TARGET}" --ignore-scripts --no-audit --no-fund
+  OPENCLAW_CHANNEL="$OPENCLAW_NPM_TARGET"
+elif is_true_flag "$OPENCLAW_ALLOW_DEV"; then
+  if npm view openclaw@dev version >/dev/null 2>&1 && npm install -g openclaw@dev --ignore-scripts --no-audit --no-fund; then
     OPENCLAW_CHANNEL="dev"
   else
-    log "openclaw@dev install failed; fallback to latest"
+    log "openclaw@dev install failed; fallback to latest stable"
     npm install -g openclaw@latest --ignore-scripts --no-audit --no-fund
     OPENCLAW_CHANNEL="latest"
   fi
@@ -138,6 +148,9 @@ NVIDIA_API_KEY="${NVIDIA_API_KEY:-}"
 TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-}"
 OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+NANOBOT_TELEGRAM_BOT_TOKEN="${NANOBOT_TELEGRAM_BOT_TOKEN:-}"
+NANOBOT_MODEL="${NANOBOT_MODEL:-z-ai/glm4.7}"
+NANOBOT_ENABLED="${NANOBOT_ENABLED:-0}"
 OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$REPO_DIR}"
 CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
 OBSIDIAN_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-obsidian-integrate.sh"
@@ -161,6 +174,9 @@ fi
 TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-6002298888}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(date +%s | sha256sum | cut -c1-24)}"
+if [ -n "$NANOBOT_TELEGRAM_BOT_TOKEN" ]; then
+  NANOBOT_ENABLED="1"
+fi
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
   log "TELEGRAM_BOT_TOKEN is required"
@@ -188,6 +204,9 @@ jq -n \
   --arg nvidiaKey "$NVIDIA_API_KEY" \
   --arg embeddingModel "$EMBEDDING_MODEL_REF" \
   --arg embeddingCacheDir "$EMBEDDING_MODEL_CACHE_DIR" \
+  --argjson compactionReserve "$OPENCLAW_COMPACTION_RESERVE_TOKENS" \
+  --argjson compactionSoft "$OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS" \
+  --arg compactionPrompt "$OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT" \
   '{
     gateway: {
       mode: "local",
@@ -269,6 +288,15 @@ jq -n \
           local: {
             modelCacheDir: $embeddingCacheDir
           }
+        },
+        compaction: {
+          mode: "safeguard",
+          reserveTokensFloor: $compactionReserve,
+          memoryFlush: {
+            enabled: true,
+            softThresholdTokens: $compactionSoft,
+            prompt: $compactionPrompt
+          }
         }
       }
     },
@@ -294,6 +322,9 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
     --arg nvidiaKey "$NVIDIA_API_KEY" \
     --arg embeddingModel "$EMBEDDING_MODEL_REF" \
     --arg embeddingCacheDir "$EMBEDDING_MODEL_CACHE_DIR" \
+    --argjson compactionReserve "$OPENCLAW_COMPACTION_RESERVE_TOKENS" \
+    --argjson compactionSoft "$OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS" \
+    --arg compactionPrompt "$OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT" \
     '
       .[0] * .[1]
       | .gateway = (.gateway // {})
@@ -363,6 +394,21 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
       | .agents.defaults.memorySearch.query.hybrid.enabled = true
       | .agents.defaults.memorySearch.query.hybrid.vectorWeight = 0
       | .agents.defaults.memorySearch.query.hybrid.textWeight = 1
+      | .agents.defaults.compaction = (.agents.defaults.compaction // {})
+      | .agents.defaults.compaction.mode = "safeguard"
+      | .agents.defaults.compaction.reserveTokensFloor = ((.agents.defaults.compaction.reserveTokensFloor | tonumber?) // $compactionReserve)
+      | .agents.defaults.compaction.memoryFlush = (.agents.defaults.compaction.memoryFlush // {})
+      | .agents.defaults.compaction.memoryFlush.enabled = true
+      | .agents.defaults.compaction.memoryFlush.softThresholdTokens = ((.agents.defaults.compaction.memoryFlush.softThresholdTokens | tonumber?) // $compactionSoft)
+      | .agents.defaults.compaction.memoryFlush.prompt = (
+          if ((.agents.defaults.compaction.memoryFlush.prompt // "") | length) > 0
+          then .agents.defaults.compaction.memoryFlush.prompt
+          else $compactionPrompt
+          end
+        )
+      | del(.agents.defaults.compaction.keepRecentTokens)
+      | del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens)
+      | del(.channels.telegram.dmToken)
       | del(.agents.defaults.memorySearch.remote)
     ' "$BASE_CFG_TMP" "$PREV_CFG_BACKUP" >"$FINAL_CFG_TMP"
 else
@@ -376,6 +422,29 @@ if [ -n "$EMBEDDING_MODEL_REF" ]; then
   ' "$FINAL_CFG_TMP" >"$FINAL_CFG_TMP.with-model"
   mv "$FINAL_CFG_TMP.with-model" "$FINAL_CFG_TMP"
 fi
+
+jq --argjson compactionReserve "$OPENCLAW_COMPACTION_RESERVE_TOKENS" \
+   --argjson compactionSoft "$OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS" \
+   --arg compactionPrompt "$OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT" '
+  .agents = (.agents // {}) |
+  .agents.defaults = (.agents.defaults // {}) |
+  .agents.defaults.compaction = (.agents.defaults.compaction // {}) |
+  .agents.defaults.compaction.mode = "safeguard" |
+  .agents.defaults.compaction.reserveTokensFloor = ((.agents.defaults.compaction.reserveTokensFloor | tonumber?) // $compactionReserve) |
+  .agents.defaults.compaction.memoryFlush = (.agents.defaults.compaction.memoryFlush // {}) |
+  .agents.defaults.compaction.memoryFlush.enabled = true |
+  .agents.defaults.compaction.memoryFlush.softThresholdTokens = ((.agents.defaults.compaction.memoryFlush.softThresholdTokens | tonumber?) // $compactionSoft) |
+  .agents.defaults.compaction.memoryFlush.prompt = (
+    if ((.agents.defaults.compaction.memoryFlush.prompt // "") | length) > 0
+    then .agents.defaults.compaction.memoryFlush.prompt
+    else $compactionPrompt
+    end
+  ) |
+  del(.agents.defaults.compaction.keepRecentTokens) |
+  del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens) |
+  del(.channels.telegram.dmToken)
+' "$FINAL_CFG_TMP" >"$FINAL_CFG_TMP.clean"
+mv "$FINAL_CFG_TMP.clean" "$FINAL_CFG_TMP"
 
 if [ -f "$HOME/.openclaw/openclaw.json" ]; then
   cp -f "$HOME/.openclaw/openclaw.json" "$HOME/.openclaw/openclaw.json.bak.rebuild.$(date +%Y%m%d-%H%M%S)" >/dev/null 2>&1 || true
@@ -405,6 +474,9 @@ alias dogbaseline='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/script
 alias dogrescue='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --rescue manual'
 alias dogmaint_start='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --maintenance-start manual'
 alias dogmaint_ok='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-watchdog.sh" --maintenance-ok manual'
+alias nanolog='tmux attach -t openclaw-nanobot'
+alias nanostatus='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-rescue-nanobot.sh" --status'
+alias nanorescue='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-rescue-nanobot.sh" --rescue manual'
 alias coreguard='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-core-guard.sh" --fix'
 alias ocupdate='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-main-system-update.sh"'
 alias ocupdate_force='FORCE_NPM_UPDATE=1 bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-main-system-update.sh"'
@@ -418,12 +490,25 @@ cat >"$HOME/.termux/boot/openclaw-launch.sh" <<'EOF'
 set -eu
 export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
 export TMPDIR="$HOME/tmp"
-mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
+mkdir -p "$HOME/openclaw-logs" "$HOME/tmp" "$HOME/.openclaw-watchdog"
 export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
 if [ -x "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh" ]; then
   "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh" --fix >>"$HOME/openclaw-logs/core-guard.log" 2>&1 || true
 fi
-exec openclaw gateway --allow-unconfigured >>"$HOME/openclaw-logs/gateway.log" 2>&1
+heartbeat_file="$HOME/.openclaw-watchdog/openclaw-heartbeat.json"
+
+openclaw gateway --allow-unconfigured >>"$HOME/openclaw-logs/gateway.log" 2>&1 &
+gateway_pid="$!"
+
+while kill -0 "$gateway_pid" >/dev/null 2>&1; do
+  ts="$(date +%s)"
+  tmp="${heartbeat_file}.tmp"
+  printf '{"ts":%s,"pid":%s,"source":"openclaw-launch"}\n' "$ts" "$gateway_pid" >"$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$heartbeat_file" 2>/dev/null || true
+  sleep 30
+done
+
+wait "$gateway_pid"
 EOF
 cat >"$HOME/.termux/boot/openclaw-watchdog-launch.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -434,6 +519,15 @@ mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
 export OPENCLAW_WATCHDOG_ENV="$HOME/.openclaw-watchdog.env"
 export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
 exec "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-watchdog.sh" --daemon >>"$HOME/openclaw-logs/watchdog.log" 2>&1
+EOF
+cat >"$HOME/.termux/boot/openclaw-nanobot-launch.sh" <<'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+set -eu
+export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
+export TMPDIR="$HOME/tmp"
+mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
+export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
+exec "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-rescue-nanobot.sh" --daemon >>"$HOME/openclaw-logs/nanobot.log" 2>&1
 EOF
 cat >"$HOME/.termux/boot/start-openclaw.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -453,8 +547,18 @@ if ! ss -ltn 2>/dev/null | grep -q ":${OPENCLAW_PORT} "; then
   fi
 fi
 tmux has-session -t openclaw-watchdog 2>/dev/null || tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
+if [ -f "$HOME/.openclaw-nanobot.env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.openclaw-nanobot.env"
+  case "$(printf '%s' "${NANOBOT_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)
+      tmux has-session -t openclaw-nanobot 2>/dev/null || tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
+      ;;
+    *) ;;
+  esac
+fi
 EOF
-chmod 700 "$HOME/.termux/boot/openclaw-launch.sh" "$HOME/.termux/boot/openclaw-watchdog-launch.sh" "$HOME/.termux/boot/start-openclaw.sh"
+chmod 700 "$HOME/.termux/boot/openclaw-launch.sh" "$HOME/.termux/boot/openclaw-watchdog-launch.sh" "$HOME/.termux/boot/openclaw-nanobot-launch.sh" "$HOME/.termux/boot/start-openclaw.sh"
 if [ -f "$CORE_GUARD_SCRIPT" ]; then
   chmod 700 "$CORE_GUARD_SCRIPT"
 fi
@@ -463,6 +567,9 @@ if [ -f "$OBSIDIAN_SCRIPT" ]; then
 fi
 if [ -f "$UPDATE_SCRIPT" ]; then
   chmod 700 "$UPDATE_SCRIPT"
+fi
+if [ -f "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-rescue-nanobot.sh" ]; then
+  chmod 700 "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-rescue-nanobot.sh"
 fi
 
 if [ "$SKIP_WATCHDOG" != "1" ]; then
@@ -481,6 +588,10 @@ MONITOR_INTERVAL_SECONDS="1800"
 MAINTENANCE_TIMEOUT_SECONDS="1800"
 RESCUE_COOLDOWN_SECONDS="300"
 STARTUP_GRACE_SECONDS="300"
+HANDSHAKE_INTERVAL_SECONDS="1800"
+HANDSHAKE_TIMEOUT_SECONDS="45"
+HANDSHAKE_STALE_SECONDS="900"
+HANDSHAKE_FAIL_THRESHOLD="1"
 MODEL_POLICY_RESTART_ON_CHANGE="0"
 DRIFT_AUTO_BASELINE_IF_HEALTHY="1"
 SELF_CHECK_ENFORCE_LOCAL_MEMORY="1"
@@ -489,9 +600,30 @@ SELFCHECK_ALERT_COOLDOWN_SECONDS="3600"
 SELFCHECK_MEMORY_INDEX_GRACE_SECONDS="21600"
 OPENCLAW_MEMORY_EMBEDDING_MODEL="$EMBEDDING_MODEL_REF"
 OPENCLAW_MEMORY_MODEL_CACHE_DIR="$EMBEDDING_MODEL_CACHE_DIR"
+OPENCLAW_COMPACTION_RESERVE_TOKENS="$OPENCLAW_COMPACTION_RESERVE_TOKENS"
+OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS="$OPENCLAW_COMPACTION_MEMORY_FLUSH_SOFT_TOKENS"
+OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT="$OPENCLAW_COMPACTION_MEMORY_FLUSH_PROMPT"
 EOF
 chmod 600 "$HOME/.openclaw-watchdog.env"
 fi
+
+log "writing nanobot env"
+cat >"$HOME/.openclaw-nanobot.env" <<EOF
+NANOBOT_ENABLED="$NANOBOT_ENABLED"
+OPENCLAW_TERMUX_REPO_DIR="$OPENCLAW_TERMUX_REPO_DIR"
+WATCHDOG_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-watchdog.sh"
+CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
+OPENCLAW_BOOT_SCRIPT="$HOME/.termux/boot/openclaw-launch.sh"
+TELEGRAM_BOT_TOKEN="$NANOBOT_TELEGRAM_BOT_TOKEN"
+TELEGRAM_OWNER_ID="$TELEGRAM_OWNER_ID"
+NVIDIA_API_KEY="$NVIDIA_API_KEY"
+NANOBOT_MODEL="$NANOBOT_MODEL"
+POLL_INTERVAL_SECONDS="15"
+HEALTHCHECK_INTERVAL_SECONDS="300"
+HEALTH_TIMEOUT_SECONDS="35"
+AUTO_RESCUE_ON_UNHEALTHY="1"
+EOF
+chmod 600 "$HOME/.openclaw-nanobot.env"
 
 if [ -x "$OBSIDIAN_SCRIPT" ] && pm list packages 2>/dev/null | grep -q '^package:md\.obsidian$'; then
   log "obsidian detected; linking vault"
@@ -505,6 +637,10 @@ tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"
 if [ "$SKIP_WATCHDOG" != "1" ]; then
   tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
   tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
+fi
+if [ "$NANOBOT_ENABLED" = "1" ]; then
+  tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
+  tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
 fi
 sleep 3
 
