@@ -409,6 +409,7 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
       | del(.agents.defaults.compaction.keepRecentTokens)
       | del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens)
       | del(.channels.telegram.dmToken)
+      | del(.models.providers.google.api)
       | del(.agents.defaults.memorySearch.remote)
     ' "$BASE_CFG_TMP" "$PREV_CFG_BACKUP" >"$FINAL_CFG_TMP"
 else
@@ -442,7 +443,8 @@ jq --argjson compactionReserve "$OPENCLAW_COMPACTION_RESERVE_TOKENS" \
   ) |
   del(.agents.defaults.compaction.keepRecentTokens) |
   del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens) |
-  del(.channels.telegram.dmToken)
+  del(.channels.telegram.dmToken) |
+  del(.models.providers.google.api)
 ' "$FINAL_CFG_TMP" >"$FINAL_CFG_TMP.clean"
 mv "$FINAL_CFG_TMP.clean" "$FINAL_CFG_TMP"
 
@@ -478,6 +480,7 @@ alias nanolog='tmux attach -t openclaw-nanobot'
 alias nanostatus='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-rescue-nanobot.sh" --status'
 alias nanorescue='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-rescue-nanobot.sh" --rescue manual'
 alias coreguard='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-openclaw-core-guard.sh" --fix'
+alias occfg='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-safe-config-edit.sh"'
 alias ocupdate='bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-main-system-update.sh"'
 alias ocupdate_force='FORCE_NPM_UPDATE=1 bash "${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}/scripts/termux-main-system-update.sh"'
 # --- OPENCLAW_TERMUX_RUNTIME_END ---
@@ -539,11 +542,15 @@ export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW
 termux-wake-lock >/dev/null 2>&1 || true
 sleep 8
 OPENCLAW_PORT="${OPENCLAW_PORT:-$(jq -r '.gateway.port // 18789' "$HOME/.openclaw/openclaw.json" 2>/dev/null || echo 18789)}"
-if ! ss -ltn 2>/dev/null | grep -q ":${OPENCLAW_PORT} "; then
-  if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1; then
-    if ! tmux has-session -t openclaw 2>/dev/null; then
-      tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"
-    fi
+gateway_running() {
+  pgrep -f "openclaw gateway" >/dev/null 2>&1 || pgrep -f "openclaw-gateway" >/dev/null 2>&1
+}
+if ! gateway_running; then
+  tmux kill-session -t openclaw >/dev/null 2>&1 || true
+  tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"
+  sleep 4
+  if ! gateway_running; then
+    printf '[%s] [start-openclaw] gateway start failed on port %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$OPENCLAW_PORT" >>"$HOME/openclaw-logs/start-openclaw.log"
   fi
 fi
 # singleton watchdog: clear stale/orphan daemons then start one managed tmux session
@@ -582,6 +589,9 @@ if [ -f "$UPDATE_SCRIPT" ]; then
 fi
 if [ -f "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-rescue-nanobot.sh" ]; then
   chmod 700 "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-rescue-nanobot.sh"
+fi
+if [ -f "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-safe-config-edit.sh" ]; then
+  chmod 700 "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-safe-config-edit.sh"
 fi
 
 if [ "$SKIP_WATCHDOG" != "1" ]; then

@@ -298,6 +298,7 @@ ensure_local_memory_config() {
     del(.agents.defaults.compaction.keepRecentTokens) |
     del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens) |
     del(.channels.telegram.dmToken) |
+    del(.models.providers.google.api) |
     del(.agents.defaults.memorySearch.remote)
   ' "$cfg" >"$tmp"; then
     rm -f "$tmp"
@@ -406,6 +407,9 @@ run_full_selfcheck() {
     fi
     if jq -e '.channels.telegram.dmToken? != null' "$cfg" >/dev/null 2>&1; then
       issues+=("channels.telegram.dmToken 為無效欄位。")
+    fi
+    if jq -e '.models.providers.google.api? != null' "$cfg" >/dev/null 2>&1; then
+      issues+=("models.providers.google.api 為無效欄位。")
     fi
     if [ "$(jq -r '.agents.defaults.compaction.mode // "unset"' "$cfg" 2>/dev/null || echo unset)" != "safeguard" ]; then
       issues+=("compaction.mode 非 safeguard。")

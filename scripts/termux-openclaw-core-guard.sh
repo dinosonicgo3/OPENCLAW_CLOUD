@@ -43,8 +43,9 @@ tmp_sha() {
   sha256sum "$file" | awk '{print $1}'
 }
 
-is_safe() {
-  [ -f "$CFG_FILE" ] || return 1
+is_safe_file() {
+  local target_file="$1"
+  [ -f "$target_file" ] || return 1
   if [ -n "$EMBEDDING_MODEL_REF" ]; then
     jq -e \
     --arg embeddingModel "$EMBEDDING_MODEL_REF" '
@@ -85,7 +86,8 @@ is_safe() {
     and ((.agents.defaults.compaction.keepRecentTokens? | not))
     and ((.agents.defaults.compaction.memoryFlush.hardThresholdTokens? | not))
     and ((.channels.telegram.dmToken? | not))
-  ' "$CFG_FILE" >/dev/null 2>&1
+    and ((.models.providers.google.api? | not))
+  ' "$target_file" >/dev/null 2>&1
   else
     jq -e '
     (.gateway // {} | .bind // "lan") as $bind
@@ -122,14 +124,32 @@ is_safe() {
     and ((.agents.defaults.compaction.keepRecentTokens? | not))
     and ((.agents.defaults.compaction.memoryFlush.hardThresholdTokens? | not))
     and ((.channels.telegram.dmToken? | not))
-  ' "$CFG_FILE" >/dev/null 2>&1
+    and ((.models.providers.google.api? | not))
+  ' "$target_file" >/dev/null 2>&1
   fi
 }
 
+is_safe() {
+  is_safe_file "$CFG_FILE"
+}
+
+validate_candidate_config() {
+  local target_file="$1"
+  jq -e . "$target_file" >/dev/null 2>&1 || return 1
+  is_safe_file "$target_file"
+}
+
 fix_config() {
-  local before after token fallback_port backup tmp
+  local before after token fallback_port backup tmp lock_dir
   if is_safe; then
     log "config checked; no changes required"
+    printf 'unchanged\n'
+    return 0
+  fi
+
+  lock_dir="$CFG_FILE.lockdir"
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    log "config heal skipped: lock busy ($lock_dir)"
     printf 'unchanged\n'
     return 0
   fi
@@ -145,7 +165,7 @@ fix_config() {
   fi
 
   tmp="$(mktemp)"
-  jq \
+  if ! jq \
     --arg token "$token" \
     --argjson fallbackPort "$fallback_port" \
     --arg embeddingModel "$EMBEDDING_MODEL_REF" \
@@ -203,19 +223,41 @@ fix_config() {
       ) |
       del(.agents.defaults.compaction.keepRecentTokens) |
       del(.agents.defaults.compaction.memoryFlush.hardThresholdTokens) |
-      del(.channels.telegram.dmToken)
-    ' "$CFG_FILE" >"$tmp"
+      del(.channels.telegram.dmToken) |
+      del(.models.providers.google.api)
+    ' "$CFG_FILE" >"$tmp"; then
+    rm -f "$tmp"
+    rmdir "$lock_dir" >/dev/null 2>&1 || true
+    log "config heal aborted: failed to build candidate json"
+    printf 'unchanged\n'
+    return 1
+  fi
+  if ! validate_candidate_config "$tmp"; then
+    rm -f "$tmp"
+    rmdir "$lock_dir" >/dev/null 2>&1 || true
+    log "config heal aborted: candidate failed validation"
+    printf 'unchanged\n'
+    return 1
+  fi
   after="$(tmp_sha "$tmp")"
   if [ "$before" != "$after" ]; then
     backup="$CFG_FILE.bak.core-guard.$(date +%Y%m%d-%H%M%S)"
     cp -f "$CFG_FILE" "$backup" 2>/dev/null || true
-    mv "$tmp" "$CFG_FILE"
-    chmod 600 "$CFG_FILE"
+    mv "$tmp" "$CFG_FILE" || {
+      rm -f "$tmp"
+      rmdir "$lock_dir" >/dev/null 2>&1 || true
+      log "config heal aborted: failed to replace config file"
+      printf 'unchanged\n'
+      return 1
+    }
+    chmod 600 "$CFG_FILE" || true
+    rmdir "$lock_dir" >/dev/null 2>&1 || true
     log "config healed (sha ${before} -> ${after}, backup=$(basename "$backup"))"
     printf 'changed\n'
     return 0
   fi
   rm -f "$tmp"
+  rmdir "$lock_dir" >/dev/null 2>&1 || true
   log "config checked; no changes required"
   printf 'unchanged\n'
   return 0
