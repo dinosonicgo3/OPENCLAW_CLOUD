@@ -8,6 +8,7 @@ HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME_DIR/DINO_OPENCLAW}"
 STATE_DIR="${NANOBOT_STATE_DIR:-$HOME_DIR/.openclaw-nanobot}"
 STATE_FILE="$STATE_DIR/state.json"
+PID_FILE="$STATE_DIR/daemon.pid"
 ENV_FILE="${NANOBOT_ENV_FILE:-$HOME_DIR/.openclaw-nanobot.env}"
 LOG_FILE="${NANOBOT_LOG_FILE:-$HOME_DIR/openclaw-logs/nanobot.log}"
 
@@ -380,7 +381,18 @@ check_health_cycle() {
 }
 
 run_daemon() {
+  local existing
   state_init
+  if [ -f "$PID_FILE" ]; then
+    existing="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$existing" ] && kill -0 "$existing" >/dev/null 2>&1; then
+      log "already running (pid=${existing})"
+      exit 0
+    fi
+  fi
+  echo "$$" >"$PID_FILE"
+  trap 'rm -f "$PID_FILE"' EXIT
+
   if [ "$NANOBOT_ENABLED" != "1" ] && [ "$NANOBOT_ENABLED" != "true" ]; then
     log "nanobot disabled; exit"
     exit 0
