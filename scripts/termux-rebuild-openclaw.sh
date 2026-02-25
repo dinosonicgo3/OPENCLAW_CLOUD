@@ -49,7 +49,7 @@ PREV_CFG_PATH="$HOME/.openclaw/openclaw.json"
 PREV_ENV_PATH="$HOME/.openclaw-watchdog.env"
 PREV_CFG_BACKUP=""
 PREV_ENV_BACKUP=""
-EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
+EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-}"
 EMBEDDING_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME/.cache/openclaw/models}"
 EMBEDDING_WARMUP_ON_REBUILD="${EMBEDDING_WARMUP_ON_REBUILD:-1}"
 
@@ -254,8 +254,19 @@ jq -n \
         memorySearch: {
           provider: "local",
           fallback: "none",
+          store: {
+            vector: {
+              enabled: false
+            }
+          },
+          query: {
+            hybrid: {
+              enabled: false,
+              vectorWeight: 0,
+              textWeight: 1
+            }
+          },
           local: {
-            modelPath: $embeddingModel,
             modelCacheDir: $embeddingCacheDir
           }
         }
@@ -338,12 +349,32 @@ if is_true_flag "$PRESERVE_CONFIG" && [ -n "$PREV_CFG_BACKUP" ] && [ -f "$PREV_C
       | .agents.defaults.memorySearch.provider = "local"
       | .agents.defaults.memorySearch.fallback = "none"
       | .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {})
-      | .agents.defaults.memorySearch.local.modelPath = $embeddingModel
+      | if ($embeddingModel | length) > 0 then
+          .agents.defaults.memorySearch.local.modelPath = $embeddingModel
+        else
+          del(.agents.defaults.memorySearch.local.modelPath)
+        end
       | .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir
+      | .agents.defaults.memorySearch.store = (.agents.defaults.memorySearch.store // {})
+      | .agents.defaults.memorySearch.store.vector = (.agents.defaults.memorySearch.store.vector // {})
+      | .agents.defaults.memorySearch.store.vector.enabled = false
+      | .agents.defaults.memorySearch.query = (.agents.defaults.memorySearch.query // {})
+      | .agents.defaults.memorySearch.query.hybrid = (.agents.defaults.memorySearch.query.hybrid // {})
+      | .agents.defaults.memorySearch.query.hybrid.enabled = false
+      | .agents.defaults.memorySearch.query.hybrid.vectorWeight = 0
+      | .agents.defaults.memorySearch.query.hybrid.textWeight = 1
       | del(.agents.defaults.memorySearch.remote)
     ' "$BASE_CFG_TMP" "$PREV_CFG_BACKUP" >"$FINAL_CFG_TMP"
 else
   cp -f "$BASE_CFG_TMP" "$FINAL_CFG_TMP"
+fi
+
+if [ -n "$EMBEDDING_MODEL_REF" ]; then
+  jq --arg embeddingModel "$EMBEDDING_MODEL_REF" '
+    .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {}) |
+    .agents.defaults.memorySearch.local.modelPath = $embeddingModel
+  ' "$FINAL_CFG_TMP" >"$FINAL_CFG_TMP.with-model"
+  mv "$FINAL_CFG_TMP.with-model" "$FINAL_CFG_TMP"
 fi
 
 if [ -f "$HOME/.openclaw/openclaw.json" ]; then
@@ -477,9 +508,9 @@ if [ "$SKIP_WATCHDOG" != "1" ]; then
 fi
 sleep 3
 
-if is_true_flag "$EMBEDDING_WARMUP_ON_REBUILD"; then
+if is_true_flag "$EMBEDDING_WARMUP_ON_REBUILD" && [ -n "$EMBEDDING_MODEL_REF" ]; then
   if ! pgrep -f "openclaw-memory|openclaw memory index" >/dev/null 2>&1; then
-    log "warming local memory index with EmbeddingGemma-300M"
+    log "warming local memory index with embedding model"
     nohup bash -lc 'export PATH="$HOME/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"; export TMPDIR="${TMPDIR:-$HOME/tmp}"; openclaw memory index --force --verbose' >>"$HOME/openclaw-logs/memory-index.log" 2>&1 &
   else
     log "memory warmup already running; skip"

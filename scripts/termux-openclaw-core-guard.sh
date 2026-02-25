@@ -4,7 +4,7 @@ set -euo pipefail
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 CFG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME_DIR/.openclaw/openclaw.json}"
 LOG_FILE="${OPENCLAW_CORE_GUARD_LOG:-$HOME_DIR/openclaw-logs/core-guard.log}"
-EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
+EMBEDDING_MODEL_REF="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-}"
 EMBEDDING_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
 
 mkdir -p "$(dirname "$CFG_FILE")" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
@@ -42,7 +42,9 @@ tmp_sha() {
 
 is_safe() {
   [ -f "$CFG_FILE" ] || return 1
-  jq -e '
+  if [ -n "$EMBEDDING_MODEL_REF" ]; then
+    jq -e \
+    --arg embeddingModel "$EMBEDDING_MODEL_REF" '
     (.gateway // {} | .bind // "lan") as $bind
     | (.gateway // {} | .auth // {} | .mode // "none") as $mode
     | (.gateway // {} | .auth // {} | .token // "") as $token
@@ -65,8 +67,34 @@ is_safe() {
     )
     and ($memProvider == "local")
     and (($memModelPath | length) > 0)
+    and ($memModelPath == $embeddingModel)
     and (($memModelCacheDir | length) > 0)
   ' "$CFG_FILE" >/dev/null 2>&1
+  else
+    jq -e '
+    (.gateway // {} | .bind // "lan") as $bind
+    | (.gateway // {} | .auth // {} | .mode // "none") as $mode
+    | (.gateway // {} | .auth // {} | .token // "") as $token
+    | (.gateway // {} | .auth // {} | .password // "") as $password
+    | (.gateway // {} | .controlUi // {} | .dangerouslyAllowHostHeaderOriginFallback // false) as $uiFallback
+    | (.gateway // {} | .port) as $port
+    | (.agents // {} | .defaults // {} | .memorySearch // {} | .provider // "") as $memProvider
+    | (.agents // {} | .defaults // {} | .memorySearch // {} | .local // {} | .modelCacheDir // "") as $memModelCacheDir
+    | (($port | tonumber?) != null)
+    and (
+      ($bind != "lan")
+      or (
+        ($uiFallback == true)
+        and (
+          ($mode == "token" and ($token | length) > 0)
+          or ($mode == "password" and ($password | length) > 0)
+        )
+      )
+    )
+    and ($memProvider == "local")
+    and (($memModelCacheDir | length) > 0)
+  ' "$CFG_FILE" >/dev/null 2>&1
+  fi
 }
 
 fix_config() {
@@ -122,7 +150,11 @@ fix_config() {
       .agents.defaults.memorySearch.provider = "local" |
       .agents.defaults.memorySearch.fallback = "none" |
       .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {}) |
-      .agents.defaults.memorySearch.local.modelPath = $embeddingModel |
+      if ($embeddingModel | length) > 0 then
+        .agents.defaults.memorySearch.local.modelPath = $embeddingModel
+      else
+        del(.agents.defaults.memorySearch.local.modelPath)
+      end |
       .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir |
       del(.agents.defaults.memorySearch.remote)
     ' "$CFG_FILE" >"$tmp"

@@ -36,7 +36,7 @@ SELFCHECK_INTERVAL_SECONDS="${SELFCHECK_INTERVAL_SECONDS:-1800}"
 SELFCHECK_ALERT_COOLDOWN_SECONDS="${SELFCHECK_ALERT_COOLDOWN_SECONDS:-3600}"
 SELFCHECK_MEMORY_INDEX_GRACE_SECONDS="${SELFCHECK_MEMORY_INDEX_GRACE_SECONDS:-21600}"
 SELF_CHECK_ENFORCE_LOCAL_MEMORY="${SELF_CHECK_ENFORCE_LOCAL_MEMORY:-1}"
-OPENCLAW_MEMORY_EMBEDDING_MODEL="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf}"
+OPENCLAW_MEMORY_EMBEDDING_MODEL="${OPENCLAW_MEMORY_EMBEDDING_MODEL:-}"
 OPENCLAW_MEMORY_MODEL_CACHE_DIR="${OPENCLAW_MEMORY_MODEL_CACHE_DIR:-$HOME_DIR/.cache/openclaw/models}"
 
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
@@ -245,8 +245,20 @@ ensure_local_memory_config() {
     .agents.defaults.memorySearch.provider = "local" |
     .agents.defaults.memorySearch.fallback = "none" |
     .agents.defaults.memorySearch.local = (.agents.defaults.memorySearch.local // {}) |
-    .agents.defaults.memorySearch.local.modelPath = $embeddingModel |
+    if ($embeddingModel | length) > 0 then
+      .agents.defaults.memorySearch.local.modelPath = $embeddingModel
+    else
+      del(.agents.defaults.memorySearch.local.modelPath)
+    end |
     .agents.defaults.memorySearch.local.modelCacheDir = $embeddingCacheDir |
+    .agents.defaults.memorySearch.store = (.agents.defaults.memorySearch.store // {}) |
+    .agents.defaults.memorySearch.store.vector = (.agents.defaults.memorySearch.store.vector // {}) |
+    .agents.defaults.memorySearch.store.vector.enabled = false |
+    .agents.defaults.memorySearch.query = (.agents.defaults.memorySearch.query // {}) |
+    .agents.defaults.memorySearch.query.hybrid = (.agents.defaults.memorySearch.query.hybrid // {}) |
+    .agents.defaults.memorySearch.query.hybrid.enabled = false |
+    .agents.defaults.memorySearch.query.hybrid.vectorWeight = 0 |
+    .agents.defaults.memorySearch.query.hybrid.textWeight = 1 |
     del(.agents.defaults.memorySearch.remote)
   ' "$cfg" >"$tmp"; then
     rm -f "$tmp"
@@ -256,7 +268,7 @@ ensure_local_memory_config() {
     cp -f "$cfg" "$cfg.bak.selfcheck.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
     mv "$tmp" "$cfg"
     chmod 600 "$cfg" >/dev/null 2>&1 || true
-    log "selfcheck auto-fixed memorySearch to local/no-remote with EmbeddingGemma-300M"
+    log "selfcheck auto-fixed memorySearch to local/no-remote (Termux-safe settings)"
     return 0
   fi
   rm -f "$tmp"
@@ -335,8 +347,11 @@ run_full_selfcheck() {
     fi
     cfg_embed_model="$(jq -r '.agents.defaults.memorySearch.local.modelPath // empty' "$cfg" 2>/dev/null || true)"
     cfg_embed_cache="$(jq -r '.agents.defaults.memorySearch.local.modelCacheDir // empty' "$cfg" 2>/dev/null || true)"
-    if [ "$cfg_embed_model" != "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ]; then
+    if [ -n "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ] && [ "$cfg_embed_model" != "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ]; then
       issues+=("記憶嵌入模型不符（config=${cfg_embed_model:-unset}, expected=${OPENCLAW_MEMORY_EMBEDDING_MODEL}）。")
+    fi
+    if [ -z "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ] && [ -n "$cfg_embed_model" ]; then
+      issues+=("Termux 本地記憶應停用嵌入模型（目前 config modelPath=${cfg_embed_model}）。")
     fi
     if [ -n "$cfg_embed_cache" ] && [ "$cfg_embed_cache" != "$OPENCLAW_MEMORY_MODEL_CACHE_DIR" ]; then
       issues+=("記憶模型快取路徑不符（config=${cfg_embed_cache}, expected=${OPENCLAW_MEMORY_MODEL_CACHE_DIR}）。")
@@ -400,10 +415,10 @@ run_full_selfcheck() {
     mem_model_runtime="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.model // empty' 2>/dev/null || true)"
     if ! printf '%s' "$mem_indexed" | grep -Eq '^[0-9]+$'; then mem_indexed=0; fi
     if ! printf '%s' "$mem_scanned" | grep -Eq '^[0-9]+$'; then mem_scanned=0; fi
-    if [ "$mem_provider_runtime" = "local" ] && [ -n "$mem_model_runtime" ] && [ "$mem_model_runtime" != "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ]; then
+    if [ -n "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ] && [ "$mem_provider_runtime" = "local" ] && [ -n "$mem_model_runtime" ] && [ "$mem_model_runtime" != "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ]; then
       issues+=("記憶運行模型不符（runtime=${mem_model_runtime}, expected=${OPENCLAW_MEMORY_EMBEDDING_MODEL}）。")
     fi
-    if [ "$mem_scanned" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
+    if [ -n "$OPENCLAW_MEMORY_EMBEDDING_MODEL" ] && [ "$mem_scanned" -gt 0 ] && [ "$mem_indexed" -eq 0 ]; then
       if [ "$warmup_active" -eq 1 ]; then
         log "memory index warmup in progress; suppressing indexed=0 alert"
       elif [ "$startup_age" -lt "$SELFCHECK_MEMORY_INDEX_GRACE_SECONDS" ]; then
