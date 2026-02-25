@@ -8,6 +8,10 @@ Independent rescue bot for phone-side OpenClaw recovery.
 - Listen on a dedicated Telegram bot token.
 - Detect unhealthy OpenClaw and trigger safe recovery.
 - Use NVIDIA `z-ai/glm4.7` for structured rescue decision only.
+- Avoid false rescue by default:
+  - startup grace window,
+  - consecutive failure threshold,
+  - rescue cooldown.
 
 ## Safety boundary
 
@@ -45,10 +49,10 @@ If `NANOBOT_TELEGRAM_BOT_TOKEN` is empty, nanobot is written but disabled.
 - `/rescue` or `/helpdog` - immediate rescue
 - `/fix` or `/repair` - fix/restart path
 - `/model` - current nanobot model
+- plain text - short reply via NVIDIA model (rescue-focused)
 
 ## Local commands
 
 - `nanolog` - attach nanobot tmux session
 - `nanostatus` - print nanobot state
 - `nanorescue` - force rescue now
-

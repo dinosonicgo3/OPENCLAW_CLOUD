@@ -2,7 +2,7 @@
 set -euo pipefail
 
 NANOBOT_NAME="${NANOBOT_NAME:-run-tian-xie}"
-NANOBOT_VERSION="1.0.0"
+NANOBOT_VERSION="1.1.0"
 
 HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME_DIR/DINO_OPENCLAW}"
@@ -26,6 +26,9 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-15}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-300}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-35}"
 AUTO_RESCUE_ON_UNHEALTHY="${AUTO_RESCUE_ON_UNHEALTHY:-1}"
+NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-600}"
+NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-3}"
+NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-900}"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -48,12 +51,30 @@ state_init() {
 {
   "last_update_id": 0,
   "last_healthcheck_ts": 0,
+  "started_at": 0,
+  "consecutive_health_failures": 0,
   "last_action_ts": 0,
   "last_action": "",
   "last_reason": ""
 }
 EOF
   fi
+  state_migrate
+}
+
+state_migrate() {
+  local tmp
+  tmp="$(mktemp)"
+  jq '
+    .last_update_id = (.last_update_id // 0) |
+    .last_healthcheck_ts = (.last_healthcheck_ts // 0) |
+    .started_at = (.started_at // 0) |
+    .consecutive_health_failures = (.consecutive_health_failures // 0) |
+    .last_action_ts = (.last_action_ts // 0) |
+    .last_action = (.last_action // "") |
+    .last_reason = (.last_reason // "")
+  ' "$STATE_FILE" >"$tmp"
+  mv "$tmp" "$STATE_FILE"
 }
 
 state_get() {
@@ -179,6 +200,49 @@ Return only JSON object with keys: action, reason."
   printf '%s\t%s\n' "$action" "$reason"
 }
 
+model_chat_reply() {
+  local user_text="$1" payload resp content
+  if [ -z "$NVIDIA_API_KEY" ]; then
+    printf '%s' "🦀 潤天蟹：我只負責救援修復。可用 /status、/rescue、/fix、/model。"
+    return 0
+  fi
+
+  payload="$(jq -n --arg model "$NANOBOT_MODEL" --arg text "$user_text" '
+    {
+      model: $model,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content: "You are a concise rescue bot for OpenClaw runtime on Android. Keep replies under 3 short lines and focus on status/recovery actions."
+        },
+        {
+          role: "user",
+          content: $text
+        }
+      ]
+    }')"
+
+  resp="$(curl -fsS --max-time 35 \
+    -X POST "${NANOBOT_BASE_URL}/chat/completions" \
+    -H "Authorization: Bearer ${NVIDIA_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null || true)"
+  content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
+  if [ -z "$content" ]; then
+    printf '%s' "🦀 潤天蟹：收到。可直接用 /status 或 /rescue。"
+  else
+    printf '%s' "$content"
+  fi
+}
+
+watchdog_maintenance_active() {
+  local wd_state
+  wd_state="$HOME_DIR/.openclaw-watchdog/state.json"
+  [ -f "$wd_state" ] || return 1
+  [ "$(jq -r '.maintenance.active // false' "$wd_state" 2>/dev/null || echo false)" = "true" ]
+}
+
 run_rescue() {
   local reason="$1" pair action plan_reason now
   now="$(date +%s)"
@@ -218,7 +282,7 @@ run_rescue() {
 }
 
 handle_command() {
-  local text="$1"
+  local text="$1" reply
   case "$text" in
     "/status"|"/status@"*)
       if openclaw_healthy; then
@@ -237,6 +301,8 @@ handle_command() {
       send_telegram "🦀 潤天蟹模型：${NANOBOT_MODEL}"
       ;;
     *)
+      reply="$(model_chat_reply "$text")"
+      send_telegram "$reply"
       ;;
   esac
 }
@@ -270,14 +336,37 @@ poll_telegram_updates() {
 }
 
 check_health_cycle() {
-  local now last_hc
+  local now last_hc started_at fail_count last_action_ts
   now="$(date +%s)"
   last_hc="$(state_get '.last_healthcheck_ts // 0')"
   if [ "$((now - last_hc))" -lt "$HEALTHCHECK_INTERVAL_SECONDS" ]; then
     return 0
   fi
   state_set ".last_healthcheck_ts=${now}"
+  if watchdog_maintenance_active; then
+    log "skip health rescue: watchdog maintenance active"
+    state_set '.consecutive_health_failures=0'
+    return 0
+  fi
+  started_at="$(state_get '.started_at // 0')"
+  if [ "$started_at" -gt 0 ] && [ "$((now - started_at))" -lt "$NANOBOT_STARTUP_GRACE_SECONDS" ]; then
+    log "startup grace active (${now}-${started_at} < ${NANOBOT_STARTUP_GRACE_SECONDS}); skip auto rescue"
+    return 0
+  fi
   if openclaw_healthy; then
+    state_set '.consecutive_health_failures=0'
+    return 0
+  fi
+  fail_count="$(state_get '.consecutive_health_failures // 0')"
+  fail_count="$((fail_count + 1))"
+  state_set ".consecutive_health_failures=${fail_count}"
+  if [ "$fail_count" -lt "$NANOBOT_FAIL_THRESHOLD" ]; then
+    log "health failed (${fail_count}/${NANOBOT_FAIL_THRESHOLD}); waiting before rescue"
+    return 0
+  fi
+  last_action_ts="$(state_get '.last_action_ts // 0')"
+  if [ "$last_action_ts" -gt 0 ] && [ "$((now - last_action_ts))" -lt "$NANOBOT_RESCUE_COOLDOWN_SECONDS" ]; then
+    log "rescue cooldown active; skip auto rescue"
     return 0
   fi
   case "$(printf '%s' "$AUTO_RESCUE_ON_UNHEALTHY" | tr '[:upper:]' '[:lower:]')" in
@@ -301,6 +390,7 @@ run_daemon() {
     exit 1
   fi
   log "started v${NANOBOT_VERSION}, model=${NANOBOT_MODEL}"
+  state_set ".started_at=$(date +%s) | .consecutive_health_failures=0"
   send_telegram "🦀 潤天蟹已啟動（v${NANOBOT_VERSION}，model=${NANOBOT_MODEL}）"
   while true; do
     poll_telegram_updates
@@ -348,4 +438,3 @@ case "${1:---daemon}" in
     exit 1
     ;;
 esac
-

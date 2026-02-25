@@ -459,6 +459,14 @@ run_full_selfcheck() {
   else
     mem_status_json="$(openclaw memory status --json 2>/dev/null || true)"
   fi
+  if [ -z "$mem_status_json" ]; then
+    sleep 2
+    if command -v timeout >/dev/null 2>&1; then
+      mem_status_json="$(timeout 25 openclaw memory status --json 2>/dev/null || true)"
+    else
+      mem_status_json="$(openclaw memory status --json 2>/dev/null || true)"
+    fi
+  fi
   if [ -n "$mem_status_json" ]; then
     mem_indexed="$(printf '%s' "$mem_status_json" | jq -r '.[0].status.files // 0' 2>/dev/null || echo 0)"
     mem_scanned="$(printf '%s' "$mem_status_json" | jq -r '.[0].scan.totalFiles // 0' 2>/dev/null || echo 0)"
@@ -484,6 +492,10 @@ run_full_selfcheck() {
   else
     if [ "$warmup_active" -eq 1 ]; then
       log "memory status unavailable during warmup; suppressing alert"
+    elif [ "$startup_age" -lt "$SELFCHECK_MEMORY_INDEX_GRACE_SECONDS" ]; then
+      log "memory status unavailable during startup grace (${startup_age}s < ${SELFCHECK_MEMORY_INDEX_GRACE_SECONDS}s); suppressing alert"
+    elif ! openclaw_healthy; then
+      log "memory status unavailable while openclaw unhealthy; suppressing alert"
     else
       issues+=("無法取得 memory status（openclaw memory status --json）。")
     fi
