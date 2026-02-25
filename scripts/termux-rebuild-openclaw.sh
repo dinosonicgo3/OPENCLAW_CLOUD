@@ -546,13 +546,25 @@ if ! ss -ltn 2>/dev/null | grep -q ":${OPENCLAW_PORT} "; then
     fi
   fi
 fi
-tmux has-session -t openclaw-watchdog 2>/dev/null || tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
+# singleton watchdog: clear stale/orphan daemons then start one managed tmux session
+for pid in $(pgrep -f 'termux-openclaw-watchdog.sh --daemon' 2>/dev/null || true); do
+  kill -9 "$pid" >/dev/null 2>&1 || true
+done
+tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
+tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
 if [ -f "$HOME/.openclaw-nanobot.env" ]; then
   # shellcheck disable=SC1091
   . "$HOME/.openclaw-nanobot.env"
   case "$(printf '%s' "${NANOBOT_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on)
-      tmux has-session -t openclaw-nanobot 2>/dev/null || tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
+      # singleton nanobot: clear stale/orphan daemons then start one managed tmux session
+      for pid in $(pgrep -f 'termux-rescue-nanobot.sh --daemon' 2>/dev/null || true); do
+        kill -9 "$pid" >/dev/null 2>&1 || true
+      done
+      rm -f "$HOME/.openclaw-nanobot/daemon.pid" >/dev/null 2>&1 || true
+      rm -rf "$HOME/.openclaw-nanobot/daemon.lock" >/dev/null 2>&1 || true
+      tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
+      tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
       ;;
     *) ;;
   esac

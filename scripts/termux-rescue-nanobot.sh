@@ -283,6 +283,33 @@ run_rescue() {
   state_set ".last_action_ts=${now} | .last_action=\"${action}\" | .last_reason=\"${reason}\""
 }
 
+run_repair_playbook() {
+  local reason="$1" now
+  now="$(date +%s)"
+  log "repair playbook start: reason=${reason}"
+
+  if [ -x "$CORE_GUARD_SCRIPT" ]; then
+    "$CORE_GUARD_SCRIPT" --fix >>"$LOG_FILE" 2>&1 || true
+  fi
+
+  if restart_openclaw; then
+    send_telegram "🦀 潤天蟹：修復成功（core-guard + restart）。原因：${reason}"
+    state_set ".last_action_ts=${now} | .last_action=\"coreguard_restart\" | .last_reason=\"${reason}\" | .consecutive_health_failures=0"
+    return 0
+  fi
+
+  if [ -x "$WATCHDOG_SCRIPT" ]; then
+    "$WATCHDOG_SCRIPT" --rescue "nanobot:${reason}" >>"$LOG_FILE" 2>&1 || true
+    send_telegram "🦀 潤天蟹：本地修復失敗，已升級為 watchdog rescue。原因：${reason}"
+    state_set ".last_action_ts=${now} | .last_action=\"watchdog_rescue\" | .last_reason=\"${reason}\""
+    return 0
+  fi
+
+  send_telegram "🦀 潤天蟹：修復失敗，且 watchdog 腳本不可用。原因：${reason}"
+  state_set ".last_action_ts=${now} | .last_action=\"repair_failed\" | .last_reason=\"${reason}\""
+  return 1
+}
+
 handle_command() {
   local text="$1" reply
   case "$text" in
@@ -297,7 +324,10 @@ handle_command() {
       run_rescue "telegram-command"
       ;;
     "/fix"|"/repair"|"/fix@"*|"/repair@"*)
-      run_rescue "telegram-repair"
+      run_repair_playbook "telegram-repair"
+      ;;
+    "/repair_plan"|"/repair_plan@"*)
+      send_telegram "🦀 潤天蟹修復流程：1) core-guard --fix 2) restart openclaw 3) 若仍不健康，觸發 watchdog rescue"
       ;;
     "/model"|"/model@"*)
       send_telegram "🦀 潤天蟹模型：${NANOBOT_MODEL}"
@@ -373,7 +403,7 @@ check_health_cycle() {
   fi
   case "$(printf '%s' "$AUTO_RESCUE_ON_UNHEALTHY" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on)
-      run_rescue "auto-healthcheck-failed"
+      run_repair_playbook "auto-healthcheck-failed"
       ;;
     *)
       send_telegram "🦀 潤天蟹：偵測到 OpenClaw unhealthy，但自動救援已關閉。"
