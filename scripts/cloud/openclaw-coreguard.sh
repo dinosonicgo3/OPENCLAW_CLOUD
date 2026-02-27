@@ -96,6 +96,7 @@ defs = ensure_dict(agents, 'defaults')
 model = ensure_dict(defs, 'model')
 set_value(model, 'primary', 'nvidia/z-ai/glm4.7')
 fallbacks = [
+    'nvidia/z-ai/glm5',
     'nvidia/moonshotai/kimi-k2.5',
     'nvidia/openai/gpt-oss-120b',
     'nvidia/nvidia/llama-3.1-nemotron-70b-instruct',
@@ -105,8 +106,17 @@ fallbacks = [
 if model.get('fallbacks') != fallbacks:
     model['fallbacks'] = fallbacks
     changed = True
-if 'models' in defs:
-    defs.pop('models', None)
+models_allowlist = {
+    'nvidia/z-ai/glm4.7': {},
+    'nvidia/z-ai/glm5': {},
+    'nvidia/moonshotai/kimi-k2.5': {},
+    'nvidia/openai/gpt-oss-120b': {},
+    'nvidia/nvidia/llama-3.1-nemotron-70b-instruct': {},
+    'google/gemini-2.5-flash-lite-preview-09-2025': {},
+    'groq/llama-3.3-70b-versatile': {},
+}
+if defs.get('models') != models_allowlist:
+    defs['models'] = models_allowlist
     changed = True
 
 set_value(defs, 'workspace', '/home/ubuntu/OpenClawVault')
@@ -147,6 +157,32 @@ models = ensure_dict(obj, 'models')
 providers = ensure_dict(models, 'providers')
 if 'opencode' in providers:
     providers.pop('opencode', None)
+    changed = True
+nvidia = ensure_dict(providers, 'nvidia')
+nvidia_models = nvidia.get('models') if isinstance(nvidia.get('models'), list) else []
+normalized = []
+for item in nvidia_models:
+    if not isinstance(item, dict):
+        continue
+    m = dict(item)
+    mid = str(m.get('id') or '').strip()
+    if mid == 'zai-org/GLM-5':
+        m['id'] = 'z-ai/glm5'
+        m['name'] = 'GLM 5 (NVIDIA)'
+        changed = True
+    normalized.append(m)
+if not any(str(x.get('id') or '').strip() == 'z-ai/glm5' for x in normalized):
+    normalized.append({
+        'id': 'z-ai/glm5',
+        'name': 'GLM 5 (NVIDIA)',
+        'reasoning': False,
+        'input': ['text'],
+        'contextWindow': 131072,
+        'maxTokens': 8192
+    })
+    changed = True
+if normalized != nvidia_models:
+    nvidia['models'] = normalized
     changed = True
 
 out.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
