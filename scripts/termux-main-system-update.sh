@@ -17,6 +17,17 @@ CHANNEL_TARGET="${CHANNEL_TARGET:-stable}"
 STATE_FILE="${HOME_DIR}/.openclaw-watchdog/state.json"
 FORCE_NPM_UPDATE="${FORCE_NPM_UPDATE:-0}"
 OPENCLAW_NPM_TARGET="${OPENCLAW_NPM_TARGET:-latest}"
+OPENCLAW_WATCHDOG_ENABLED="${OPENCLAW_WATCHDOG_ENABLED:-0}"
+OPENCLAW_PORT="${OPENCLAW_PORT:-}"
+
+if [ -f "${HOME_DIR}/.openclaw-nanobot.env" ]; then
+  # shellcheck disable=SC1090
+  . "${HOME_DIR}/.openclaw-nanobot.env"
+fi
+if [ -z "${OPENCLAW_PORT:-}" ] && [ -f "${HOME_DIR}/.openclaw/openclaw.json" ]; then
+  OPENCLAW_PORT="$(jq -r '.gateway.port // empty' "${HOME_DIR}/.openclaw/openclaw.json" 2>/dev/null || true)"
+fi
+OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 
 export PATH="${NPM_PREFIX_DIR}/bin:/data/data/com.termux/files/usr/bin:$PATH"
 mkdir -p "$LOG_DIR" "$TMP_DIR" "${HOME_DIR}/backups" "${HOME_DIR}/.openclaw"
@@ -48,6 +59,10 @@ bool_true() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+watchdog_enabled() {
+  bool_true "$OPENCLAW_WATCHDOG_ENABLED"
 }
 
 acquire_lock() {
@@ -86,18 +101,18 @@ detect_latest_version() {
 }
 
 start_maintenance() {
-  if [ -x "$WATCHDOG_SCRIPT" ]; then
+  if watchdog_enabled && [ -x "$WATCHDOG_SCRIPT" ]; then
     bash "$WATCHDOG_SCRIPT" --maintenance-start "$MAINT_REASON" >/dev/null 2>&1 || true
     maintenance_started=1
     log "maintenance started: ${MAINT_REASON}"
   else
-    log "watchdog script missing; maintenance handshake skipped"
+    log "watchdog disabled or missing; maintenance handshake skipped"
   fi
 }
 
 finish_maintenance() {
   local reason="$1"
-  if [ "$maintenance_started" -eq 1 ] && [ -x "$WATCHDOG_SCRIPT" ]; then
+  if [ "$maintenance_started" -eq 1 ] && watchdog_enabled && [ -x "$WATCHDOG_SCRIPT" ]; then
     bash "$WATCHDOG_SCRIPT" --maintenance-ok "$reason" >/dev/null 2>&1 || true
     log "maintenance finished: ${reason}"
   fi
@@ -105,7 +120,7 @@ finish_maintenance() {
 
 rescue_if_needed() {
   local reason="$1"
-  if [ "$maintenance_started" -eq 1 ] && [ -x "$WATCHDOG_SCRIPT" ]; then
+  if [ "$maintenance_started" -eq 1 ] && watchdog_enabled && [ -x "$WATCHDOG_SCRIPT" ]; then
     bash "$WATCHDOG_SCRIPT" --rescue "$reason" >/dev/null 2>&1 || true
     log "rescue requested: ${reason}"
   fi
@@ -121,7 +136,26 @@ clear_maintenance_state() {
 }
 
 is_healthy() {
-  timeout 30s openclaw health >/dev/null 2>&1
+  if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 \
+    && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1 \
+    && ! pgrep -x openclaw >/dev/null 2>&1; then
+    return 1
+  fi
+  python - "$OPENCLAW_PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(1.5)
+try:
+    s.connect(("127.0.0.1", port))
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
 }
 
 wait_healthy() {

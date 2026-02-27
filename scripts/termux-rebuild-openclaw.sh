@@ -41,6 +41,11 @@ export DEBIAN_FRONTEND=noninteractive
 export TMPDIR="${TMPDIR:-$HOME/tmp}"
 mkdir -p "$TMPDIR"
 SKIP_WATCHDOG="${OPENCLAW_REBUILD_SKIP_WATCHDOG:-0}"
+OPENCLAW_WATCHDOG_ENABLED="${OPENCLAW_WATCHDOG_ENABLED:-0}"
+if ! is_true_flag "$OPENCLAW_WATCHDOG_ENABLED"; then
+  SKIP_WATCHDOG="1"
+fi
+SKIP_NANOBOT="${OPENCLAW_REBUILD_SKIP_NANOBOT:-1}"
 REBUILD_MODE="${OPENCLAW_REBUILD_MODE:-standard}"
 PRESERVE_CONFIG="${OPENCLAW_REBUILD_PRESERVE_CONFIG:-1}"
 PRESERVE_STATE="${OPENCLAW_REBUILD_PRESERVE_STATE:-1}"
@@ -63,16 +68,16 @@ pkill -9 -x zeroclaw >/dev/null 2>&1 || true
 pkill -9 -f "zeroclaw daemon" >/dev/null 2>&1 || true
 pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
 pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
-pkill -9 -f "termux-rescue-nanobot.sh" >/dev/null 2>&1 || true
-if [ "$SKIP_WATCHDOG" != "1" ]; then
-  pkill -9 -f "termux-openclaw-watchdog.sh" >/dev/null 2>&1 || true
+if [ "$SKIP_NANOBOT" != "1" ]; then
+  pkill -9 -f "termux-rescue-nanobot.sh" >/dev/null 2>&1 || true
 fi
+pkill -9 -f "termux-openclaw-watchdog.sh" >/dev/null 2>&1 || true
 pkill -9 -x openclaw >/dev/null 2>&1 || true
 tmux kill-session -t openclaw >/dev/null 2>&1 || true
-tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
-if [ "$SKIP_WATCHDOG" != "1" ]; then
-  tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
+if [ "$SKIP_NANOBOT" != "1" ]; then
+  tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
 fi
+tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
 
 mkdir -p "$REBUILD_BACKUP_DIR"
 if [ -f "$PREV_CFG_PATH" ]; then
@@ -102,6 +107,8 @@ if [ "$SKIP_WATCHDOG" != "1" ]; then
   if ! is_true_flag "$PRESERVE_STATE"; then
     rm -rf "$HOME/.openclaw-watchdog"
   fi
+else
+  rm -f "$HOME/.openclaw-watchdog.env" >/dev/null 2>&1 || true
 fi
 
 mkdir -p "$HOME/.termux/boot"
@@ -513,6 +520,7 @@ done
 
 wait "$gateway_pid"
 EOF
+if [ "$SKIP_WATCHDOG" != "1" ]; then
 cat >"$HOME/.termux/boot/openclaw-watchdog-launch.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 set -eu
@@ -523,6 +531,9 @@ export OPENCLAW_WATCHDOG_ENV="$HOME/.openclaw-watchdog.env"
 export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW}"
 exec "$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-watchdog.sh" --daemon >>"$HOME/openclaw-logs/watchdog.log" 2>&1
 EOF
+else
+  rm -f "$HOME/.termux/boot/openclaw-watchdog-launch.sh" >/dev/null 2>&1 || true
+fi
 cat >"$HOME/.termux/boot/openclaw-nanobot-launch.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 set -eu
@@ -542,6 +553,18 @@ export OPENCLAW_TERMUX_REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME/DINO_OPENCLAW
 termux-wake-lock >/dev/null 2>&1 || true
 sleep 8
 OPENCLAW_PORT="${OPENCLAW_PORT:-$(jq -r '.gateway.port // 18789' "$HOME/.openclaw/openclaw.json" 2>/dev/null || echo 18789)}"
+OPENCLAW_WATCHDOG_ENABLED="${OPENCLAW_WATCHDOG_ENABLED:-0}"
+NANOBOT_ENABLED="${NANOBOT_ENABLED:-0}"
+is_true_flag() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if [ -f "$HOME/.openclaw-nanobot.env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.openclaw-nanobot.env"
+fi
 gateway_running() {
   pgrep -f "openclaw gateway" >/dev/null 2>&1 || pgrep -f "openclaw-gateway" >/dev/null 2>&1
 }
@@ -553,31 +576,34 @@ if ! gateway_running; then
     printf '[%s] [start-openclaw] gateway start failed on port %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$OPENCLAW_PORT" >>"$HOME/openclaw-logs/start-openclaw.log"
   fi
 fi
-# singleton watchdog: clear stale/orphan daemons then start one managed tmux session
-for pid in $(pgrep -f 'termux-openclaw-watchdog.sh --daemon' 2>/dev/null || true); do
-  kill -9 "$pid" >/dev/null 2>&1 || true
-done
-tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
-tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
-if [ -f "$HOME/.openclaw-nanobot.env" ]; then
-  # shellcheck disable=SC1091
-  . "$HOME/.openclaw-nanobot.env"
-  case "$(printf '%s' "${NANOBOT_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on)
-      # singleton nanobot: clear stale/orphan daemons then start one managed tmux session
-      for pid in $(pgrep -f 'termux-rescue-nanobot.sh --daemon' 2>/dev/null || true); do
-        kill -9 "$pid" >/dev/null 2>&1 || true
-      done
-      rm -f "$HOME/.openclaw-nanobot/daemon.pid" >/dev/null 2>&1 || true
-      rm -rf "$HOME/.openclaw-nanobot/daemon.lock" >/dev/null 2>&1 || true
-      tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
-      tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
-      ;;
-    *) ;;
-  esac
+if is_true_flag "$OPENCLAW_WATCHDOG_ENABLED"; then
+  # singleton watchdog: clear stale/orphan daemons then start one managed tmux session
+  for pid in $(pgrep -f 'termux-openclaw-watchdog.sh --daemon' 2>/dev/null || true); do
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  done
+  tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
+  tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
+else
+  for pid in $(pgrep -f 'termux-openclaw-watchdog.sh --daemon' 2>/dev/null || true); do
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  done
+  tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
+fi
+if is_true_flag "$NANOBOT_ENABLED"; then
+  # singleton nanobot: clear stale/orphan daemons then start one managed tmux session
+  for pid in $(pgrep -f 'termux-rescue-nanobot.sh --daemon' 2>/dev/null || true); do
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  done
+  rm -f "$HOME/.openclaw-nanobot/daemon.pid" >/dev/null 2>&1 || true
+  rm -rf "$HOME/.openclaw-nanobot/daemon.lock" >/dev/null 2>&1 || true
+  tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
+  tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
 fi
 EOF
-chmod 700 "$HOME/.termux/boot/openclaw-launch.sh" "$HOME/.termux/boot/openclaw-watchdog-launch.sh" "$HOME/.termux/boot/openclaw-nanobot-launch.sh" "$HOME/.termux/boot/start-openclaw.sh"
+chmod 700 "$HOME/.termux/boot/openclaw-launch.sh" "$HOME/.termux/boot/openclaw-nanobot-launch.sh" "$HOME/.termux/boot/start-openclaw.sh"
+if [ -f "$HOME/.termux/boot/openclaw-watchdog-launch.sh" ]; then
+  chmod 700 "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
+fi
 if [ -f "$CORE_GUARD_SCRIPT" ]; then
   chmod 700 "$CORE_GUARD_SCRIPT"
 fi
@@ -632,8 +658,8 @@ fi
 log "writing nanobot env"
 cat >"$HOME/.openclaw-nanobot.env" <<EOF
 NANOBOT_ENABLED="$NANOBOT_ENABLED"
+OPENCLAW_WATCHDOG_ENABLED="$OPENCLAW_WATCHDOG_ENABLED"
 OPENCLAW_TERMUX_REPO_DIR="$OPENCLAW_TERMUX_REPO_DIR"
-WATCHDOG_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-watchdog.sh"
 CORE_GUARD_SCRIPT="$OPENCLAW_TERMUX_REPO_DIR/scripts/termux-openclaw-core-guard.sh"
 OPENCLAW_BOOT_SCRIPT="$HOME/.termux/boot/openclaw-launch.sh"
 TELEGRAM_BOT_TOKEN="$NANOBOT_TELEGRAM_BOT_TOKEN"
@@ -662,10 +688,16 @@ tmux new -d -s openclaw "$HOME/.termux/boot/openclaw-launch.sh"
 if [ "$SKIP_WATCHDOG" != "1" ]; then
   tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
   tmux new -d -s openclaw-watchdog "$HOME/.termux/boot/openclaw-watchdog-launch.sh"
+else
+  tmux kill-session -t openclaw-watchdog >/dev/null 2>&1 || true
 fi
 if [ "$NANOBOT_ENABLED" = "1" ]; then
-  tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
-  tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
+  if [ "$SKIP_NANOBOT" != "1" ]; then
+    rm -f "$HOME/.openclaw-nanobot/daemon.pid" >/dev/null 2>&1 || true
+    rm -rf "$HOME/.openclaw-nanobot/daemon.lock" >/dev/null 2>&1 || true
+    tmux kill-session -t openclaw-nanobot >/dev/null 2>&1 || true
+    tmux new -d -s openclaw-nanobot "$HOME/.termux/boot/openclaw-nanobot-launch.sh"
+  fi
 fi
 sleep 3
 
