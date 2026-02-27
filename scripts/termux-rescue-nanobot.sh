@@ -14,9 +14,10 @@ ENV_FILE="${NANOBOT_ENV_FILE:-$HOME_DIR/.openclaw-nanobot.env}"
 LOG_FILE="${NANOBOT_LOG_FILE:-$HOME_DIR/openclaw-logs/nanobot.log}"
 
 CORE_GUARD_SCRIPT="${CORE_GUARD_SCRIPT:-$REPO_DIR/scripts/termux-openclaw-core-guard.sh}"
-OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-$HOME_DIR/.termux/boot/openclaw-launch.sh}"
+OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-}"
 OPENCLAW_REBUILD_SCRIPT="${OPENCLAW_REBUILD_SCRIPT:-$REPO_DIR/scripts/termux-rebuild-openclaw.sh}"
 OPENCLAW_REPO_BRANCH="${OPENCLAW_REPO_BRANCH:-main}"
+NANOBOT_RUNTIME_ENV="${NANOBOT_RUNTIME_ENV:-auto}"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-}"
@@ -52,6 +53,19 @@ if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   . "$ENV_FILE"
 fi
+if [ "${NANOBOT_RUNTIME_ENV:-auto}" = "auto" ]; then
+  case "$HOME_DIR" in
+    /data/data/com.termux/files/home*) NANOBOT_RUNTIME_ENV="termux" ;;
+    *) NANOBOT_RUNTIME_ENV="cloud" ;;
+  esac
+fi
+if [ -z "${OPENCLAW_BOOT_SCRIPT:-}" ]; then
+  if [ "$NANOBOT_RUNTIME_ENV" = "cloud" ] && [ -f "$HOME_DIR/cloud/openclaw-launch.sh" ]; then
+    OPENCLAW_BOOT_SCRIPT="$HOME_DIR/cloud/openclaw-launch.sh"
+  else
+    OPENCLAW_BOOT_SCRIPT="$HOME_DIR/.termux/boot/openclaw-launch.sh"
+  fi
+fi
 if [ -z "${OPENCLAW_PORT:-}" ] && [ -f "$HOME_DIR/.openclaw/openclaw.json" ]; then
   OPENCLAW_PORT="$(jq -r '.gateway.port // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || true)"
 fi
@@ -72,7 +86,7 @@ recent_error_excerpt() {
 sanitize_issue_lines() {
   sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' \
     | sed -E 's/[[:space:]]+/ /g; s/^ +//; s/ +$//' \
-    | grep -Eiv '(^\{)|("_meta")|(subsystem\\":)|(isError=false)|(memory embeddings: batch start)|(memory embeddings: query start)|(embedded run agent end)' \
+    | grep -Eiv '(^\{)|(^\[)|("_meta")|(subsystem\\":)|(isError=false)|(memory embeddings: batch start)|(memory embeddings: query start)|(embedded run agent end)' \
     | grep -Ei 'error|failed|timeout|exception|panic|denied|forbidden|unhealthy|crash|invalid|refused|conflict|429|500|503' \
     | awk 'length($0)>0 { print substr($0,1,220) }' || true
 }
@@ -181,6 +195,7 @@ build_status_report() {
     printf -- '- OpenClaw: 異常（port=%s, pid=%s）\n' "$port" "${opid:-n/a}"
   fi
   printf -- '- Nanobot: 在線（pid=%s）\n' "${npid:-n/a}"
+  printf -- '- 環境: %s\n' "${NANOBOT_RUNTIME_ENV}"
   printf -- '- 版本: local=%s, git=%s, 穩定標籤=%s\n' "${ver:-unknown}" "${head:-unknown}" "${stable:-none}"
   printf -- '- 上游: npm=%s, github=%s\n' "${npm_latest:-unknown}" "${gh_tag:-unknown}"
   if [ -n "$issues" ]; then
@@ -307,8 +322,15 @@ PY
 }
 
 restart_openclaw() {
-  if [ ! -x "$OPENCLAW_BOOT_SCRIPT" ]; then
+  if [ ! -f "$OPENCLAW_BOOT_SCRIPT" ]; then
     log "boot script missing: $OPENCLAW_BOOT_SCRIPT"
+    return 1
+  fi
+  if [ ! -x "$OPENCLAW_BOOT_SCRIPT" ]; then
+    chmod +x "$OPENCLAW_BOOT_SCRIPT" >/dev/null 2>&1 || true
+  fi
+  if [ ! -x "$OPENCLAW_BOOT_SCRIPT" ]; then
+    log "boot script not executable: $OPENCLAW_BOOT_SCRIPT"
     return 1
   fi
   tmux kill-session -t openclaw >/dev/null 2>&1 || true
@@ -419,7 +441,7 @@ model_chat_reply() {
       messages: [
         {
           role: "system",
-          content: "你是潤天蟹，OpenClaw 醫護兵。請用繁體中文簡潔回覆。你必須根據系統診斷資訊回答，不要叫使用者輸入斜線指令。若可直接處理，直接處理；若需要修復，清楚說明你將執行什麼。"
+          content: "你是潤天蟹，OpenClaw 醫護兵。部署環境是 Oracle Cloud Ubuntu（非手機 Termux）。請用繁體中文簡潔回覆。你必須根據系統診斷資訊回答，不要叫使用者輸入斜線指令。若可直接處理，直接處理；若需要修復，清楚說明你將執行什麼。"
         },
         {
           role: "system",
@@ -680,7 +702,7 @@ run_daemon() {
     exit 1
   fi
 
-  log "started v${NANOBOT_VERSION}, model=${NANOBOT_MODEL}, auto_healthcheck=${AUTO_HEALTHCHECK_ENABLED}, auto_rescue=${AUTO_RESCUE_ON_UNHEALTHY}"
+  log "started v${NANOBOT_VERSION}, env=${NANOBOT_RUNTIME_ENV}, model=${NANOBOT_MODEL}, auto_healthcheck=${AUTO_HEALTHCHECK_ENABLED}, auto_rescue=${AUTO_RESCUE_ON_UNHEALTHY}"
   state_set ".started_at=$(date +%s) | .consecutive_health_failures=0"
   if is_true_flag "$NANOBOT_STARTUP_NOTIFY"; then
     send_telegram "🦀 潤天蟹已啟動（v${NANOBOT_VERSION}）。我會自動讀取引天渡狀態/日誌/版本並待命，你只要自然語言描述需求。"
