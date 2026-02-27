@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 NANOBOT_NAME="${NANOBOT_NAME:-runtianxie}"
@@ -39,6 +39,8 @@ NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
 NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-1800}"
 NANOBOT_STARTUP_NOTIFY="${NANOBOT_STARTUP_NOTIFY:-0}"
+MAX_TELEGRAM_TEXT_BYTES="${MAX_TELEGRAM_TEXT_BYTES:-3500}"
+NANOBOT_INCLUDE_UPSTREAM_CHECK="${NANOBOT_INCLUDE_UPSTREAM_CHECK:-0}"
 INTENT_CLASS="chat"
 INTENT_REASON="default"
 
@@ -63,10 +65,26 @@ recent_error_excerpt() {
   local src="$1"
   [ -f "$src" ] || return 0
   tail -n "$NANOBOT_DIAG_LOG_LINES" "$src" 2>/dev/null \
-    | grep -E -i 'error|failed|timeout|exception|panic|denied|forbidden|unhealthy|crash|invalid' \
-    | sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' \
-    | awk '{print substr($0,1,220)}' \
+    | sanitize_issue_lines \
     | tail -n 6 || true
+}
+
+sanitize_issue_lines() {
+  sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ +//; s/ +$//' \
+    | grep -Eiv '(^\{)|("_meta")|(subsystem\\":)|(isError=false)|(memory embeddings: batch start)|(memory embeddings: query start)|(embedded run agent end)' \
+    | grep -Ei 'error|failed|timeout|exception|panic|denied|forbidden|unhealthy|crash|invalid|refused|conflict|429|500|503' \
+    | awk 'length($0)>0 { print substr($0,1,220) }' || true
+}
+
+truncate_telegram_text() {
+  local msg="$1" bytes
+  bytes="$(printf '%s' "$msg" | wc -c | tr -d ' ')"
+  if [ "${bytes:-0}" -gt "$MAX_TELEGRAM_TEXT_BYTES" ]; then
+    printf '%s\n%s' "$(printf '%s' "$msg" | head -c "$MAX_TELEGRAM_TEXT_BYTES")" "...(訊息過長，已截斷)"
+  else
+    printf '%s' "$msg"
+  fi
 }
 
 fetch_upstream_versions() {
@@ -103,7 +121,11 @@ collect_openclaw_snapshot_json() {
 
   gateway_err="$(recent_error_excerpt "$HOME_DIR/openclaw-logs/gateway.log" | tail -n 6)"
   runtime_err="$(recent_error_excerpt "$runtime_log" | tail -n 6)"
-  upstream_json="$(fetch_upstream_versions)"
+  if [ "$NANOBOT_INCLUDE_UPSTREAM_CHECK" = "1" ]; then
+    upstream_json="$(fetch_upstream_versions)"
+  else
+    upstream_json='{"npm_latest":"","github_latest_tag":"","github_published_at":""}'
+  fi
 
   jq -n \
     --argjson healthy "$healthy" \
@@ -146,7 +168,11 @@ build_status_report() {
   stable="$(printf '%s' "$snapshot" | jq -r '.stable_tag // ""')"
   npm_latest="$(printf '%s' "$snapshot" | jq -r '.upstream.npm_latest // ""')"
   gh_tag="$(printf '%s' "$snapshot" | jq -r '.upstream.github_latest_tag // ""')"
-  issues="$(printf '%s' "$snapshot" | jq -r '.recent_gateway_errors + "\n" + .recent_runtime_errors' | tail -n 8)"
+  issues="$(printf '%s' "$snapshot" \
+    | jq -r '.recent_gateway_errors, .recent_runtime_errors' 2>/dev/null \
+    | sed '/^null$/d;/^$/d' \
+    | sanitize_issue_lines \
+    | tail -n 6 || true)"
 
   printf '🦀 潤天蟹自動診斷報告\n'
   if [ "$healthy" = "true" ]; then
@@ -207,25 +233,29 @@ state_set() {
 
 send_telegram() {
   local msg="$1"
+  local msg_to_send
   [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
   [ -n "$TELEGRAM_OWNER_ID" ] || return 0
+  msg_to_send="$(truncate_telegram_text "$msg")"
   curl -fsS --max-time 20 \
     -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     -d "chat_id=${TELEGRAM_OWNER_ID}" \
-    --data-urlencode "text=${msg}" \
+    --data-urlencode "text=${msg_to_send}" \
     -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
 }
 
 send_telegram_to_chat() {
   local chat_id="$1"
   local msg="$2"
+  local msg_to_send
   [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
   [ -n "$chat_id" ] || chat_id="$TELEGRAM_OWNER_ID"
   [ -n "$chat_id" ] || return 0
+  msg_to_send="$(truncate_telegram_text "$msg")"
   curl -fsS --max-time 20 \
     -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     -d "chat_id=${chat_id}" \
-    --data-urlencode "text=${msg}" \
+    --data-urlencode "text=${msg_to_send}" \
     -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
 }
 
@@ -292,7 +322,6 @@ restart_openclaw() {
 
 resolve_stable_tag() {
   [ -d "$REPO_DIR/.git" ] || return 0
-  git -C "$REPO_DIR" fetch --all --tags --prune >/dev/null 2>&1 || true
   git -C "$REPO_DIR" tag -l '穩定版*' --sort=-creatordate | head -n1
 }
 
@@ -492,44 +521,50 @@ run_repair_playbook() {
 }
 
 handle_command() {
-  local text="$1" chat_id="${2:-$TELEGRAM_OWNER_ID}" intent reason reply typing_pid
+  local text="$1" chat_id="${2:-$TELEGRAM_OWNER_ID}" intent reason reply typing_pid rc
+  rc=0
   start_typing_loop "$chat_id"
   typing_pid="${TYPING_PID:-}"
-  case "$text" in
-    "/status"|"/status@"*)
-      send_telegram_to_chat "$chat_id" "$(build_status_report)"
-      ;;
-    "/repair"|"/rescue"|"/fix"|"/repair@"*|"/rescue@"*|"/fix@"*)
-      run_repair_playbook "telegram-command"
-      ;;
-    "/model"|"/model@"*)
-      send_telegram_to_chat "$chat_id" "🦀 潤天蟹目前模型：${NANOBOT_MODEL}"
-      ;;
-    "/help"|"/help@"*)
-      send_telegram_to_chat "$chat_id" "🦀 我會先自動診斷，再直接處理。你用自然語言描述需求即可。"
-      ;;
-    *)
-      classify_natural_intent "$text"
-      intent="$INTENT_CLASS"
-      reason="$INTENT_REASON"
-      case "$intent" in
-        repair)
-          run_repair_playbook "natural:${reason}"
-          ;;
-        diagnose)
-          send_telegram_to_chat "$chat_id" "$(build_status_report)"
-          ;;
-        status)
-          send_telegram_to_chat "$chat_id" "$(build_status_report)"
-          ;;
-        chat|*)
-          reply="$(model_chat_reply "$text")"
-          send_telegram_to_chat "$chat_id" "$reply"
-          ;;
-      esac
-      ;;
-  esac
+  trap 'stop_typing_loop "$typing_pid"' RETURN
+  {
+    case "$text" in
+      "/status"|"/status@"*)
+        send_telegram_to_chat "$chat_id" "$(build_status_report)"
+        ;;
+      "/repair"|"/rescue"|"/fix"|"/repair@"*|"/rescue@"*|"/fix@"*)
+        run_repair_playbook "telegram-command"
+        ;;
+      "/model"|"/model@"*)
+        send_telegram_to_chat "$chat_id" "🦀 潤天蟹目前模型：${NANOBOT_MODEL}"
+        ;;
+      "/help"|"/help@"*)
+        send_telegram_to_chat "$chat_id" "🦀 我會先自動診斷，再直接處理。你用自然語言描述需求即可。"
+        ;;
+      *)
+        classify_natural_intent "$text"
+        intent="$INTENT_CLASS"
+        reason="$INTENT_REASON"
+        case "$intent" in
+          repair)
+            run_repair_playbook "natural:${reason}"
+            ;;
+          diagnose)
+            send_telegram_to_chat "$chat_id" "$(build_status_report)"
+            ;;
+          status)
+            send_telegram_to_chat "$chat_id" "$(build_status_report)"
+            ;;
+          chat|*)
+            reply="$(model_chat_reply "$text")"
+            send_telegram_to_chat "$chat_id" "$reply"
+            ;;
+        esac
+        ;;
+    esac
+  } || rc=$?
+  trap - RETURN
   stop_typing_loop "$typing_pid"
+  return "$rc"
 }
 
 poll_telegram_updates() {
@@ -547,6 +582,9 @@ poll_telegram_updates() {
     return 0
   fi
   if [ "$(jq -r '.ok // false' "$resp_file" 2>/dev/null || echo false)" != "true" ]; then
+    local desc
+    desc="$(jq -r '.description // empty' "$resp_file" 2>/dev/null || true)"
+    [ -n "$desc" ] && log "getUpdates not-ok: ${desc}"
     rm -f "$resp_file"
     return 0
   fi
@@ -630,7 +668,8 @@ run_daemon() {
   fi
 
   echo "$$" >"$PID_FILE"
-  trap 'rm -f "$PID_FILE"; rm -rf "$LOCK_DIR"' EXIT
+  trap 'pkill -P $$ >/dev/null 2>&1 || true; rm -f "$PID_FILE"; rm -rf "$LOCK_DIR"' EXIT
+  trap 'exit 0' INT TERM HUP
 
   if ! is_true_flag "$NANOBOT_ENABLED"; then
     log "nanobot disabled; exit"
