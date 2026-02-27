@@ -333,7 +333,7 @@ restart_openclaw() {
     log "boot script not executable: $OPENCLAW_BOOT_SCRIPT"
     return 1
   fi
-  tmux kill-session -t openclaw >/dev/null 2>&1 || true
+  tmux kill-session -t =openclaw >/dev/null 2>&1 || true
   pkill -9 -f "openclaw gateway" >/dev/null 2>&1 || true
   pkill -9 -f "openclaw-gateway" >/dev/null 2>&1 || true
   pkill -9 -x openclaw >/dev/null 2>&1 || true
