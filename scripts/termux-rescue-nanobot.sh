@@ -4,8 +4,8 @@ set -euo pipefail
 NANOBOT_NAME="${NANOBOT_NAME:-runtianxie}"
 NANOBOT_VERSION="1.3.0"
 
-HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
-REPO_DIR="${OPENCLAW_TERMUX_REPO_DIR:-$HOME_DIR/DINO_OPENCLAW}"
+HOME_DIR="${HOME:-/home/ubuntu}"
+REPO_DIR="${OPENCLAW_REPO_DIR:-${OPENCLAW_TERMUX_REPO_DIR:-$HOME_DIR/DINO_OPENCLAW}}"
 STATE_DIR="${NANOBOT_STATE_DIR:-$HOME_DIR/.openclaw-nanobot}"
 STATE_FILE="$STATE_DIR/state.json"
 PID_FILE="$STATE_DIR/daemon.pid"
@@ -13,9 +13,9 @@ LOCK_DIR="$STATE_DIR/daemon.lock"
 ENV_FILE="${NANOBOT_ENV_FILE:-$HOME_DIR/.openclaw-nanobot.env}"
 LOG_FILE="${NANOBOT_LOG_FILE:-$HOME_DIR/openclaw-logs/nanobot.log}"
 
-CORE_GUARD_SCRIPT="${CORE_GUARD_SCRIPT:-$REPO_DIR/scripts/termux-openclaw-core-guard.sh}"
+CORE_GUARD_SCRIPT="${CORE_GUARD_SCRIPT:-}"
 OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-}"
-OPENCLAW_REBUILD_SCRIPT="${OPENCLAW_REBUILD_SCRIPT:-$REPO_DIR/scripts/termux-rebuild-openclaw.sh}"
+OPENCLAW_REBUILD_SCRIPT="${OPENCLAW_REBUILD_SCRIPT:-}"
 OPENCLAW_REPO_BRANCH="${OPENCLAW_REPO_BRANCH:-main}"
 NANOBOT_RUNTIME_ENV="${NANOBOT_RUNTIME_ENV:-auto}"
 
@@ -47,7 +47,7 @@ INTENT_REASON="default"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
-export PATH="$HOME_DIR/.npm-global/bin:/data/data/com.termux/files/usr/bin:$PATH"
+export PATH="$HOME_DIR/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
@@ -59,6 +59,13 @@ if [ "${NANOBOT_RUNTIME_ENV:-auto}" = "auto" ]; then
     *) NANOBOT_RUNTIME_ENV="cloud" ;;
   esac
 fi
+if [ -z "${CORE_GUARD_SCRIPT:-}" ]; then
+  if [ "$NANOBOT_RUNTIME_ENV" = "cloud" ] && [ -f "$HOME_DIR/cloud/openclaw-coreguard.sh" ]; then
+    CORE_GUARD_SCRIPT="$HOME_DIR/cloud/openclaw-coreguard.sh"
+  else
+    CORE_GUARD_SCRIPT="$REPO_DIR/scripts/termux-openclaw-core-guard.sh"
+  fi
+fi
 if [ -z "${OPENCLAW_BOOT_SCRIPT:-}" ]; then
   if [ "$NANOBOT_RUNTIME_ENV" = "cloud" ] && [ -f "$HOME_DIR/cloud/openclaw-launch.sh" ]; then
     OPENCLAW_BOOT_SCRIPT="$HOME_DIR/cloud/openclaw-launch.sh"
@@ -66,13 +73,28 @@ if [ -z "${OPENCLAW_BOOT_SCRIPT:-}" ]; then
     OPENCLAW_BOOT_SCRIPT="$HOME_DIR/.termux/boot/openclaw-launch.sh"
   fi
 fi
+if [ -z "${OPENCLAW_REBUILD_SCRIPT:-}" ]; then
+  if [ "$NANOBOT_RUNTIME_ENV" = "cloud" ] && [ -f "$HOME_DIR/cloud/openclaw-rebuild.sh" ]; then
+    OPENCLAW_REBUILD_SCRIPT="$HOME_DIR/cloud/openclaw-rebuild.sh"
+  else
+    OPENCLAW_REBUILD_SCRIPT="$REPO_DIR/scripts/termux-rebuild-openclaw.sh"
+  fi
+fi
 if [ -z "${OPENCLAW_PORT:-}" ] && [ -f "$HOME_DIR/.openclaw/openclaw.json" ]; then
   OPENCLAW_PORT="$(jq -r '.gateway.port // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || true)"
 fi
 OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
+OPENCLAW_BIN="${OPENCLAW_BIN:-$(command -v openclaw || true)}"
+if [ -z "$OPENCLAW_BIN" ] && [ -x "$HOME_DIR/.npm-global/bin/openclaw" ]; then
+  OPENCLAW_BIN="$HOME_DIR/.npm-global/bin/openclaw"
+fi
+OPENCLAW_BIN="${OPENCLAW_BIN:-openclaw}"
 
 latest_openclaw_runtime_log() {
-  find "$HOME_DIR/tmp" -maxdepth 2 -type f -name 'openclaw-*.log' 2>/dev/null | sort | tail -n1
+  {
+    find /tmp/openclaw -maxdepth 1 -type f -name 'openclaw-*.log' 2>/dev/null
+    find "$HOME_DIR/tmp" -maxdepth 2 -type f -name 'openclaw-*.log' 2>/dev/null
+  } | sort | tail -n1
 }
 
 recent_error_excerpt() {
@@ -123,7 +145,7 @@ collect_openclaw_snapshot_json() {
   tmux_sessions="$(tmux ls 2>/dev/null | awk -F: '{print $1}' | jq -R . | jq -s . 2>/dev/null || echo '[]')"
   openclaw_pid="$(pgrep -f 'openclaw-gateway|openclaw gateway' | head -n1 || true)"
   nanobot_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-  openclaw_ver="$(openclaw --version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
+  openclaw_ver="$("$OPENCLAW_BIN" --version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
   git_head="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
   stable_tag="$(resolve_stable_tag)"
   runtime_log="$(latest_openclaw_runtime_log)"
@@ -522,8 +544,8 @@ run_repair_playbook() {
   send_telegram "🦀 潤天蟹修復前回報：開始修復流程。原因：${reason}"
   log "repair playbook start: reason=${reason}"
 
-  if [ -x "$CORE_GUARD_SCRIPT" ]; then
-    "$CORE_GUARD_SCRIPT" --fix >>"$LOG_FILE" 2>&1 || true
+  if [ -f "$CORE_GUARD_SCRIPT" ]; then
+    bash "$CORE_GUARD_SCRIPT" --fix >>"$LOG_FILE" 2>&1 || true
   fi
 
   if restart_openclaw; then

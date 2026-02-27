@@ -2,6 +2,9 @@
 set -euo pipefail
 
 export PATH="$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export TZ="${TZ:-Asia/Taipei}"
+export LANG="${LANG:-C.UTF-8}"
+export LC_ALL="${LC_ALL:-C.UTF-8}"
 mkdir -p "$HOME/openclaw-logs" "$HOME/tmp" "$HOME/.openclaw-nanobot"
 
 start_openclaw() {
@@ -17,6 +20,9 @@ start_nanobot() {
 }
 
 start_webhook() {
+  if [ ! -f "$HOME/cloud/webhook_skeleton.py" ]; then
+    return 0
+  fi
   if ! pgrep -f "python3 .*cloud/webhook_skeleton.py" >/dev/null 2>&1; then
     nohup python3 "$HOME/cloud/webhook_skeleton.py" >>"$HOME/openclaw-logs/webhook.log" 2>&1 < /dev/null &
   fi
