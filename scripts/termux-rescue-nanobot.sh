@@ -31,6 +31,7 @@ NANOBOT_ENABLED="${NANOBOT_ENABLED:-0}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-}"
 NANOBOT_DIAG_LOG_LINES="${NANOBOT_DIAG_LOG_LINES:-60}"
 NANOBOT_GITHUB_REPO="${NANOBOT_GITHUB_REPO:-openclaw/openclaw}"
+OPENCLAW_OFFICIAL_GITHUB_URL="${OPENCLAW_OFFICIAL_GITHUB_URL:-https://github.com/openclaw/openclaw}"
 
 # Keep nanobot mostly dormant: only react to user messages by default.
 AUTO_HEALTHCHECK_ENABLED="${AUTO_HEALTHCHECK_ENABLED:-0}"
@@ -159,7 +160,7 @@ detect_blocking_tasks() {
         cmd="";
         for (i=5; i<=NF; i++) cmd = cmd (i==5 ? "" : " ") $i;
 
-        known_stuck=(cmd ~ /@tobilu\/qmd\/dist\/qmd\.js embed|node-llama-cpp|cmake-js-llama|playwright|puppeteer|chromium.*--headless|npm (install|update|ci)|pnpm (install|update)|git (clone|fetch|pull)|sqlite3 .*VACUUM|embedding|indexer|reindex/);
+        known_stuck=(cmd ~ /^(@tobilu\/qmd\/dist\/qmd\.js embed|node-llama-cpp|cmake-js-llama|playwright|puppeteer|chromium[^\n]*--headless|npm (install|update|ci)|pnpm (install|update)|git (clone|fetch|pull)|sqlite3 [^\n]*VACUUM|embedding|indexer|reindex)/);
         openclaw_child=(root[ppid] == 1);
         generic_hung=(openclaw_child && et >= minHung && cpu <= cpuMax && cmd !~ /openclaw-gateway|openclaw gateway|termux-rescue-nanobot|webhook_skeleton/);
 
@@ -317,13 +318,25 @@ EOF
   return 0
 }
 
+resolve_openclaw_repo_slug() {
+  local slug url
+  slug="${NANOBOT_GITHUB_REPO:-}"
+  url="${OPENCLAW_OFFICIAL_GITHUB_URL:-}"
+  if [ -z "$slug" ] && [ -n "$url" ]; then
+    slug="$(printf '%s' "$url" | sed -E 's#^https?://github.com/##; s#\.git$##; s#/*$##')"
+  fi
+  [ -n "$slug" ] || slug="openclaw/openclaw"
+  printf '%s' "$slug"
+}
+
 fetch_upstream_versions() {
-  local npm_latest gh_tag gh_updated
+  local npm_latest gh_tag gh_updated repo_slug
+  repo_slug="$(resolve_openclaw_repo_slug)"
   npm_latest="$(run_with_timeout 10 npm view openclaw version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
-  gh_tag="$(curl -fsS --max-time 10 "https://api.github.com/repos/${NANOBOT_GITHUB_REPO}/releases/latest" 2>/dev/null | jq -r '.tag_name // empty' || true)"
-  gh_updated="$(curl -fsS --max-time 10 "https://api.github.com/repos/${NANOBOT_GITHUB_REPO}/releases/latest" 2>/dev/null | jq -r '.published_at // empty' || true)"
-  jq -n --arg npm "$npm_latest" --arg gh "$gh_tag" --arg gh_updated "$gh_updated" \
-    '{npm_latest:$npm, github_latest_tag:$gh, github_published_at:$gh_updated}'
+  gh_tag="$(curl -fsS --max-time 10 "https://api.github.com/repos/${repo_slug}/releases/latest" 2>/dev/null | jq -r '.tag_name // empty' || true)"
+  gh_updated="$(curl -fsS --max-time 10 "https://api.github.com/repos/${repo_slug}/releases/latest" 2>/dev/null | jq -r '.published_at // empty' || true)"
+  jq -n --arg npm "$npm_latest" --arg gh "$gh_tag" --arg gh_updated "$gh_updated" --arg repo "$repo_slug" --arg official "$OPENCLAW_OFFICIAL_GITHUB_URL" \
+    '{npm_latest:$npm, github_latest_tag:$gh, github_published_at:$gh_updated, github_repo:$repo, official_github_url:$official}'
 }
 
 collect_openclaw_snapshot_json() {
@@ -357,7 +370,7 @@ collect_openclaw_snapshot_json() {
   if [ "$NANOBOT_INCLUDE_UPSTREAM_CHECK" = "1" ]; then
     upstream_json="$(fetch_upstream_versions)"
   else
-    upstream_json='{"npm_latest":"","github_latest_tag":"","github_published_at":""}'
+    upstream_json="$(jq -n --arg repo "$(resolve_openclaw_repo_slug)" --arg official "$OPENCLAW_OFFICIAL_GITHUB_URL" '{npm_latest:"", github_latest_tag:"", github_published_at:"", github_repo:$repo, official_github_url:$official}' )"
   fi
 
   jq -n \
@@ -396,7 +409,7 @@ collect_openclaw_snapshot_json() {
 }
 
 build_status_report() {
-  local snapshot healthy port opid npid ver head stable npm_latest gh_tag issues blockers reason timeout_events stale
+  local snapshot healthy port opid npid ver head stable npm_latest gh_tag official_url repo_slug issues blockers reason timeout_events stale
   snapshot="$(collect_openclaw_snapshot_json)"
   healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
   port="$(printf '%s' "$snapshot" | jq -r '.gateway_port')"
@@ -407,6 +420,8 @@ build_status_report() {
   stable="$(printf '%s' "$snapshot" | jq -r '.stable_tag // ""')"
   npm_latest="$(printf '%s' "$snapshot" | jq -r '.upstream.npm_latest // ""')"
   gh_tag="$(printf '%s' "$snapshot" | jq -r '.upstream.github_latest_tag // ""')"
+  official_url="$(printf '%s' "$snapshot" | jq -r '.upstream.official_github_url // ""')"
+  repo_slug="$(printf '%s' "$snapshot" | jq -r '.upstream.github_repo // ""')"
   reason="$(printf '%s' "$snapshot" | jq -r '.unhealthy_reason // ""')"
   timeout_events="$(printf '%s' "$snapshot" | jq -r '.timeout_events // 0')"
   stale="$(printf '%s' "$snapshot" | jq -r '.stale_artifacts // ""')"
@@ -427,6 +442,9 @@ build_status_report() {
   printf -- '- 環境: %s\n' "${NANOBOT_RUNTIME_ENV}"
   printf -- '- 版本: local=%s, git=%s, 穩定標籤=%s\n' "${ver:-unknown}" "${head:-unknown}" "${stable:-none}"
   printf -- '- 上游: npm=%s, github=%s\n' "${npm_latest:-unknown}" "${gh_tag:-unknown}"
+  if [ -n "$official_url" ]; then
+    printf -- '- 官方來源: %s (%s)\n' "$official_url" "${repo_slug:-openclaw/openclaw}"
+  fi
   if [ -n "$issues" ]; then
     printf -- '- 最近異常摘要:\n%s\n' "$(printf '%s' "$issues" | tail -n 6)"
   fi

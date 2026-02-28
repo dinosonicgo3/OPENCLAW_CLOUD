@@ -6,6 +6,7 @@ export PATH="$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
 ACTION="${1:---fix}"
 BACKUP_DIR="${OPENCLAW_CONFIG_BACKUP_DIR:-$HOME/.openclaw/backups}"
+OPENCLAW_BIN="${OPENCLAW_BIN:-$HOME/.npm-global/bin/openclaw}"
 mkdir -p "$BACKUP_DIR"
 
 if [ ! -f "$CONFIG_PATH" ]; then
@@ -217,6 +218,17 @@ if action == '--check' and changed:
 PY
 )"
 rc=$?
+
+python3 -m json.tool "$TMP_OUT" >/dev/null
+STRICT_OUT="$(mktemp)"
+STRICT_ERR="$(mktemp)"
+if ! OPENCLAW_CONFIG_PATH="$TMP_OUT" "$OPENCLAW_BIN" config get gateway.port --json >"$STRICT_OUT" 2>"$STRICT_ERR"; then
+  echo "[cloud-coreguard] candidate strict validation failed; original unchanged" >&2
+  tail -n 80 "$STRICT_ERR" >&2 || true
+  rm -f "$TMP_OUT" "$STRICT_OUT" "$STRICT_ERR"
+  exit 3
+fi
+rm -f "$STRICT_OUT" "$STRICT_ERR"
 
 if [ "$ACTION" = "--check" ]; then
   cat "$TMP_OUT" >/dev/null
