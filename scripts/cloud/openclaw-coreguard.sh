@@ -97,7 +97,8 @@ if not isinstance(tele.get('allowFrom'), list):
 agents = ensure_dict(obj, 'agents')
 defs = ensure_dict(agents, 'defaults')
 model = ensure_dict(defs, 'model')
-set_value(model, 'primary', 'nvidia/z-ai/glm4.7')
+primary_model = str(model.get('primary') or 'nvidia/z-ai/glm4.7').strip() or 'nvidia/z-ai/glm4.7'
+set_value(model, 'primary', primary_model)
 if model.get('fallbacks') != []:
     model['fallbacks'] = []
     changed = True
@@ -106,6 +107,16 @@ if not isinstance(defs.get('models'), dict):
     changed = True
 
 set_value(defs, 'workspace', '/home/ubuntu/OpenClawVault')
+
+subagents = ensure_dict(defs, 'subagents')
+follow_primary = str(os.environ.get('OPENCLAW_FORCE_SUBAGENT_FOLLOW_PRIMARY', '1')).strip().lower() in ('1', 'true', 'yes', 'on')
+if follow_primary:
+    set_value(subagents, 'model', primary_model)
+elif not str(subagents.get('model') or '').strip():
+    set_value(subagents, 'model', primary_model)
+set_value(subagents, 'runTimeoutSeconds', 900)
+set_value(subagents, 'announceTimeoutMs', 180000)
+set_value(subagents, 'maxConcurrent', 6)
 
 memory_search = ensure_dict(defs, 'memorySearch')
 set_value(memory_search, 'provider', 'local')
@@ -173,7 +184,6 @@ required_allow = {
     'nvidia/z-ai/glm4.7',
     'nvidia/z-ai/glm5',
     'nvidia/moonshotai/kimi-k2.5',
-    'nvidia/openai/gpt-oss-120b',
     'nvidia/meta/llama-3.3-70b-instruct',
     'google/gemini-2.5-flash',
     'google/gemini-2.5-flash-lite',
@@ -212,6 +222,17 @@ for pname in ('openrouter', 'opencode'):
         if key not in allow:
             allow[key] = {}
             changed = True
+
+blocked_allow = {
+    'nvidia/openai/gpt-oss-120b',
+    'openrouter/openai/gpt-oss-120b',
+    'openrouter/openai/gpt-oss-120b:free',
+    'openrouter/openai/gpt-oss-120b:exacto',
+}
+for key in list(allow.keys()):
+    if key in blocked_allow:
+        del allow[key]
+        changed = True
 
 out.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print('changed=1' if changed else 'changed=0')

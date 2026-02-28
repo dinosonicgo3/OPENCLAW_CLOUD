@@ -47,6 +47,9 @@ OPENCLAW_HUNG_TASK_CPU_MAX="${OPENCLAW_HUNG_TASK_CPU_MAX:-1.0}"
 OPENCLAW_TIMEOUT_STORM_LINES="${OPENCLAW_TIMEOUT_STORM_LINES:-1400}"
 OPENCLAW_TIMEOUT_STORM_THRESHOLD="${OPENCLAW_TIMEOUT_STORM_THRESHOLD:-6}"
 OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS="${OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS:-300}"
+SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS="${SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS:-30}"
+SUBAGENT_ALERT_WINDOW_SECONDS="${SUBAGENT_ALERT_WINDOW_SECONDS:-300}"
+SUBAGENT_ALERT_LINES="${SUBAGENT_ALERT_LINES:-1800}"
 OPENCLAW_STALE_LOCK_SECONDS="${OPENCLAW_STALE_LOCK_SECONDS:-1800}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
@@ -201,10 +204,13 @@ def parse_ts(line):
     except Exception:
         return None
 
-strict_timeout = re.compile(r'embedded run timeout|FailoverError: LLM request timed out|lane task error: .*timed out|getUpdates.*timed out|request timed out|ETIMEDOUT|ECONNRESET', re.I)
+strict_timeout = re.compile(r'embedded run timeout|FailoverError: LLM request timed out|lane task error: .*timed out|ETIMEDOUT|ECONNRESET', re.I)
+benign_timeout = re.compile(r'waiting for run end: .*timeoutMs=|getUpdates.*timed out|timeoutMs=', re.I)
 count = 0
 for path in (runtime_log, gateway_log):
     for line in tail_lines(path, max_lines):
+        if benign_timeout.search(line):
+            continue
         if not strict_timeout.search(line):
             continue
         ts = parse_ts(line)
@@ -216,6 +222,12 @@ for path in (runtime_log, gateway_log):
 
 print(count)
 PY
+}
+
+get_primary_model_from_config() {
+  if [ -f "$HOME_DIR/.openclaw/openclaw.json" ]; then
+    jq -r '.agents.defaults.model.primary // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null | head -n1
+  fi
 }
 
 detect_stale_artifacts() {
@@ -281,7 +293,10 @@ gateway_health_ok() {
 }
 
 enforce_stable_model_defaults() {
-  run_with_timeout 25 "$OPENCLAW_BIN" models set "nvidia/z-ai/glm4.7" --agent main >/dev/null 2>&1 || true
+  local primary
+  primary="$(get_primary_model_from_config)"
+  primary="${primary:-nvidia/z-ai/glm4.7}"
+  run_with_timeout 25 "$OPENCLAW_BIN" models set "$primary" --agent main >/dev/null 2>&1 || true
 }
 
 remediate_blocking_tasks() {
@@ -531,10 +546,14 @@ state_init() {
   "repair_started_at": 0,
   "repair_reason": "",
   "repair_step": "",
-  "repair_updated_at": 0
+  "repair_updated_at": 0,
+  "last_subagent_alert_key": "",
+  "last_subagent_alert_ts": 0,
+  "last_subagent_check_ts": 0
 }
 EOF
   fi
+  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0)'
 }
 
 state_get() {
@@ -1148,6 +1167,122 @@ check_health_cycle() {
   fi
 }
 
+detect_recent_subagent_failure() {
+  local runtime_log gateway_log
+  runtime_log="$(latest_openclaw_runtime_log)"
+  gateway_log="$HOME_DIR/openclaw-logs/gateway.log"
+  python - "$runtime_log" "$gateway_log" "$SUBAGENT_ALERT_LINES" "$SUBAGENT_ALERT_WINDOW_SECONDS" <<'PY' 2>/dev/null || echo '{"found":false}'
+import collections
+import datetime as dt
+import hashlib
+import json
+import re
+import sys
+
+runtime_log, gateway_log, max_lines, window_sec = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+json_ts = re.compile(r'"time":"([^"]+)"')
+iso_ts = re.compile(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)')
+fail_pat = re.compile(
+    r'lane task error: .*subagent.*timed out|'
+    r'lane task error: lane=subagent.*timed out|'
+    r'FailoverError: LLM request timed out|'
+    r'embedded run tool error: .*tool=sessions_spawn|'
+    r'sessions_spawn.*(error|failed|fail)|'
+    r'subagent.*(failed|error|timed out)',
+    re.I
+)
+ignore_pat = re.compile(r'sessions_spawn tool start|sessions_spawn tool end|waiting for run end: .*timeoutMs=', re.I)
+now = dt.datetime.now(dt.timezone.utc)
+
+def tail_lines(path, n):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return list(collections.deque(f, maxlen=n))
+    except Exception:
+        return []
+
+def parse_ts(line):
+    m = json_ts.search(line) or iso_ts.search(line)
+    if not m:
+        return None
+    raw = m.group(1).replace("Z", "+00:00")
+    try:
+        return dt.datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+latest = None
+for path in (runtime_log, gateway_log):
+    for line in tail_lines(path, max_lines):
+        if ignore_pat.search(line):
+            continue
+        if not fail_pat.search(line):
+            continue
+        ts = parse_ts(line)
+        if ts is not None and (now - ts).total_seconds() > window_sec:
+            continue
+        latest = (ts, line.strip())
+
+if latest is None:
+    print(json.dumps({"found": False}, ensure_ascii=False))
+    raise SystemExit
+
+ts, line = latest
+reason = "subagent-failure"
+low = line.lower()
+if "sessions_spawn" in low and ("error" in low or "fail" in low):
+    reason = "sessions-spawn-failed"
+elif "timed out" in low:
+    reason = "subagent-timeout"
+elif "unauthorized" in low or "token_mismatch" in low:
+    reason = "subagent-auth-failed"
+key_src = f"{ts.isoformat() if ts else 'no-ts'}|{line}"
+key = hashlib.sha1(key_src.encode("utf-8", "ignore")).hexdigest()[:16]
+print(json.dumps({
+    "found": True,
+    "reason": reason,
+    "key": key,
+    "excerpt": line[:220],
+    "timestamp": ts.isoformat() if ts else ""
+}, ensure_ascii=False))
+PY
+}
+
+maybe_notify_subagent_failure() {
+  local now last_check diag found key reason excerpt primary submodel fallbacks last_key
+  now="$(date +%s)"
+  last_check="$(state_get '.last_subagent_check_ts // 0')"
+  if [ "$last_check" -gt 0 ] && [ "$((now - last_check))" -lt "$SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS" ]; then
+    return 0
+  fi
+  state_set ".last_subagent_check_ts=${now}"
+
+  diag="$(detect_recent_subagent_failure)"
+  found="$(printf '%s' "$diag" | jq -r '.found // false' 2>/dev/null || echo false)"
+  [ "$found" = "true" ] || return 0
+
+  key="$(printf '%s' "$diag" | jq -r '.key // ""' 2>/dev/null || true)"
+  reason="$(printf '%s' "$diag" | jq -r '.reason // "subagent-failure"' 2>/dev/null || echo subagent-failure)"
+  excerpt="$(printf '%s' "$diag" | jq -r '.excerpt // ""' 2>/dev/null || true)"
+  last_key="$(state_get '.last_subagent_alert_key // ""')"
+  [ -n "$key" ] || key="no-key-$now"
+  if [ "$key" = "$last_key" ]; then
+    return 0
+  fi
+
+  primary="$(get_primary_model_from_config)"
+  submodel="$(jq -r '.agents.defaults.subagents.model // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || true)"
+  fallbacks="$(jq -c '.agents.defaults.model.fallbacks // []' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || echo '[]')"
+  send_telegram "⚠️ 子代理失敗告警：${reason}
+- 主模型：${primary:-unknown}
+- 子代理模型：${submodel:-unknown}
+- fallbacks：${fallbacks}
+- 摘要：${excerpt:-n/a}
+（已即時回報，未自動改模型）"
+  log "subagent failure alert: reason=${reason}, key=${key}, excerpt=${excerpt}"
+  state_set ".last_subagent_alert_key=\"${key}\" | .last_subagent_alert_ts=${now}"
+}
+
 run_daemon() {
   local existing
   state_init
@@ -1185,6 +1320,7 @@ run_daemon() {
 
   while true; do
     poll_telegram_updates
+    maybe_notify_subagent_failure
     check_health_cycle
     sleep "$POLL_INTERVAL_SECONDS"
   done
@@ -1219,6 +1355,7 @@ case "${1:---daemon}" in
   --once)
     state_init
     poll_telegram_updates
+    maybe_notify_subagent_failure
     check_health_cycle
     ;;
   --status)
