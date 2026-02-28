@@ -19,6 +19,12 @@ start_nanobot() {
   fi
 }
 
+start_subagent_sentinel() {
+  if ! tmux has-session -t =openclaw-subagent-sentinel 2>/dev/null; then
+    tmux new -d -s openclaw-subagent-sentinel "bash $HOME/DINO_OPENCLAW/scripts/cloud/openclaw-subagent-sentinel.sh >>$HOME/openclaw-logs/subagent-sentinel.log 2>&1"
+  fi
+}
+
 start_webhook() {
   if [ ! -f "$HOME/cloud/webhook_skeleton.py" ]; then
     return 0
@@ -31,6 +37,7 @@ start_webhook() {
 while true; do
   start_openclaw
   start_nanobot
+  start_subagent_sentinel
   start_webhook
   sleep 10
 done
