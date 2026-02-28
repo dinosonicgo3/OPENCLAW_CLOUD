@@ -10,6 +10,7 @@ STATE_DIR="${NANOBOT_STATE_DIR:-$HOME_DIR/.openclaw-nanobot}"
 STATE_FILE="$STATE_DIR/state.json"
 PID_FILE="$STATE_DIR/daemon.pid"
 LOCK_DIR="$STATE_DIR/daemon.lock"
+REPAIR_LOCK_DIR="$STATE_DIR/repair.lock"
 ENV_FILE="${NANOBOT_ENV_FILE:-$HOME_DIR/.openclaw-nanobot.env}"
 LOG_FILE="${NANOBOT_LOG_FILE:-$HOME_DIR/openclaw-logs/nanobot.log}"
 
@@ -440,6 +441,21 @@ build_status_report() {
   fi
   if [ "$healthy" != "true" ] && [ -n "$reason" ]; then
     printf -- '- 判定原因: %s\n' "$reason"
+  elif [ "$healthy" = "true" ] && [ -n "$reason" ]; then
+    printf -- '- 風險提示: %s\n' "$reason"
+  fi
+}
+
+build_brief_status_line() {
+  local snapshot healthy port reason
+  snapshot="$(collect_openclaw_snapshot_json)"
+  healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
+  port="$(printf '%s' "$snapshot" | jq -r '.gateway_port // ""')"
+  reason="$(printf '%s' "$snapshot" | jq -r '.unhealthy_reason // ""')"
+  if [ "$healthy" = "true" ]; then
+    printf '目前 OpenClaw 正常運作（port=%s）。' "${port:-unknown}"
+  else
+    printf '目前 OpenClaw 異常（port=%s，原因=%s）。' "${port:-unknown}" "${reason:-unknown}"
   fi
 }
 
@@ -492,7 +508,12 @@ state_init() {
   "last_action_ts": 0,
   "last_action": "",
   "last_reason": "",
-  "last_report": ""
+  "last_report": "",
+  "repair_in_progress": false,
+  "repair_started_at": 0,
+  "repair_reason": "",
+  "repair_step": "",
+  "repair_updated_at": 0
 }
 EOF
   fi
@@ -509,6 +530,28 @@ state_set() {
   tmp="$(mktemp)"
   jq "$expr" "$STATE_FILE" >"$tmp"
   mv "$tmp" "$STATE_FILE"
+}
+
+repair_is_running() {
+  [ -d "$REPAIR_LOCK_DIR" ]
+}
+
+repair_status_summary() {
+  local in_progress started updated reason step now elapsed
+  in_progress="$(state_get '.repair_in_progress // false')"
+  started="$(state_get '.repair_started_at // 0')"
+  updated="$(state_get '.repair_updated_at // 0')"
+  reason="$(state_get '.repair_reason // ""')"
+  step="$(state_get '.repair_step // ""')"
+  now="$(date +%s)"
+  if [ "$in_progress" = "true" ] || repair_is_running; then
+    elapsed=$(( now - started ))
+    [ "$elapsed" -lt 0 ] && elapsed=0
+    printf '🛠️ 修復進行中（%ss）\n- 原因: %s\n- 目前步驟: %s\n- 最近更新: %ss 前' \
+      "$elapsed" "${reason:-unknown}" "${step:-working}" "$(( now - updated ))"
+  else
+    printf '✅ 目前沒有進行中的修復流程。'
+  fi
 }
 
 send_telegram() {
@@ -631,8 +674,8 @@ PY
   runtime_log="$(latest_openclaw_runtime_log)"
   timeout_events="$(count_timeout_events "$runtime_log" "$HOME_DIR/openclaw-logs/gateway.log")"
   if [ "${timeout_events:-0}" -ge "$OPENCLAW_TIMEOUT_STORM_THRESHOLD" ]; then
-    OPENCLAW_LAST_HEALTH_REASON="timeout-storm:${timeout_events}"
-    return 1
+    # Timeout storm is treated as warning; not a hard-down signal by itself.
+    OPENCLAW_LAST_HEALTH_REASON="timeout-storm-warning:${timeout_events}"
   fi
 
   if [ -n "$(detect_blocking_tasks)" ]; then
@@ -764,7 +807,7 @@ model_chat_reply() {
   local user_text="$1" payload resp content snapshot_json
   snapshot_json="$(collect_openclaw_snapshot_json)"
   if [ -z "$NVIDIA_API_KEY" ]; then
-    printf '%s\n' "我已先完成自動診斷。你直接說需求，我會直接檢查並處理，不需要你用斜線指令。"
+    printf '%s\n' "$(build_brief_status_line)"
     return 0
   fi
   payload="$(jq -n --arg model "$NANOBOT_MODEL" --arg text "$user_text" --arg snapshot "$snapshot_json" '
@@ -793,7 +836,10 @@ model_chat_reply() {
     -d "$payload" 2>/dev/null || true)"
   content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
   if [ -z "$content" ]; then
-    printf '%s\n' "我已自動診斷完成。你直接描述需求，我會直接檢查並處理，不需要你輸入任何指令格式。"
+    printf '%s\n%s\n%s\n' \
+      "我先直接回報現況：" \
+      "$(build_brief_status_line)" \
+      "你可直接說：要我做健康檢查、看最近錯誤，或執行修復。"
   else
     printf '%s\n' "$content"
   fi
@@ -804,6 +850,11 @@ classify_natural_intent() {
   INTENT_CLASS="chat"
   INTENT_REASON="natural-chat"
   text_norm="$(printf '%s' "$user_text" | tr '[:upper:]' '[:lower:]')"
+  if printf '%s' "$text_norm" | grep -Eiq '修復完成|完成了嗎|進度|還在修|修好了嗎|修好了沒|done|progress'; then
+    INTENT_CLASS="status"
+    INTENT_REASON="keyword-repair-progress"
+    return 0
+  fi
   if printf '%s' "$text_norm" | grep -Eiq '狀態|健康|還在嗎|有沒有運作|運作嗎|在線|online|health|status'; then
     INTENT_CLASS="status"
     INTENT_REASON="keyword-status"
@@ -856,7 +907,15 @@ classify_natural_intent() {
 
 run_repair_playbook() {
   local reason="$1" now blockers timeout_events stale steps_msg allow_rebuild
+  if repair_is_running; then
+    send_telegram "⏳ 潤天蟹：已有修復流程在進行中，避免重複啟動。\n$(repair_status_summary)"
+    return 0
+  fi
+  mkdir "$REPAIR_LOCK_DIR" >/dev/null 2>&1 || true
+  trap 'rm -rf "$REPAIR_LOCK_DIR" >/dev/null 2>&1 || true' RETURN
+
   now="$(date +%s)"
+  state_set ".repair_in_progress=true | .repair_started_at=${now} | .repair_reason=\"${reason}\" | .repair_step=\"init\" | .repair_updated_at=${now}"
   blockers="$(detect_blocking_tasks | head -n 6 || true)"
   timeout_events="$(count_timeout_events "$(latest_openclaw_runtime_log)" "$HOME_DIR/openclaw-logs/gateway.log")"
   stale="$(detect_stale_artifacts | head -n 6 || true)"
@@ -873,6 +932,7 @@ run_repair_playbook() {
     telegram-command|*keyword-rollback*|*force-rebuild*) allow_rebuild=1 ;;
   esac
 
+  state_set ".repair_step=\"terminate_blockers\" | .repair_updated_at=$(date +%s)"
   if remediate_blocking_tasks; then
     send_telegram "🛠️ 潤天蟹：偵測到阻塞任務，已先中止阻塞任務。"
     if openclaw_healthy; then
@@ -881,6 +941,7 @@ run_repair_playbook() {
       return 0
     fi
   fi
+  state_set ".repair_step=\"clear_stale_artifacts\" | .repair_updated_at=$(date +%s)"
   if remediate_stale_artifacts; then
     send_telegram "🧹 潤天蟹：已清理陳舊鎖檔/殘留 pid，準備再次健康檢查。"
     if openclaw_healthy; then
@@ -891,22 +952,30 @@ run_repair_playbook() {
   fi
 
   if [ "${timeout_events:-0}" -ge "$OPENCLAW_TIMEOUT_STORM_THRESHOLD" ]; then
+    state_set ".repair_step=\"enforce_model_defaults\" | .repair_updated_at=$(date +%s)"
     enforce_stable_model_defaults
   fi
 
+  state_set ".repair_step=\"coreguard\" | .repair_updated_at=$(date +%s)"
   if [ -f "$CORE_GUARD_SCRIPT" ]; then
     bash "$CORE_GUARD_SCRIPT" --fix >>"$LOG_FILE" 2>&1 || true
   fi
 
+  state_set ".repair_step=\"restart_openclaw\" | .repair_updated_at=$(date +%s)"
   if restart_openclaw; then
     send_telegram "✅ 潤天蟹修復後回報：core-guard + restart 成功。原因：${reason}"
-    state_set ".last_action_ts=${now} | .last_action=\"coreguard_restart\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
+    state_set ".last_action_ts=${now} | .last_action=\"coreguard_restart\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0 | .repair_in_progress=false | .repair_step=\"done\" | .repair_updated_at=$(date +%s)"
+    trap - RETURN
+    rm -rf "$REPAIR_LOCK_DIR" >/dev/null 2>&1 || true
     return 0
   fi
 
   if [ "$allow_rebuild" -eq 1 ]; then
+    state_set ".repair_step=\"rebuild_rescue\" | .repair_updated_at=$(date +%s)"
     if rebuild_rescue "$reason"; then
-      state_set ".last_action_ts=${now} | .last_action=\"rebuild_rescue\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
+      state_set ".last_action_ts=${now} | .last_action=\"rebuild_rescue\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0 | .repair_in_progress=false | .repair_step=\"done\" | .repair_updated_at=$(date +%s)"
+      trap - RETURN
+      rm -rf "$REPAIR_LOCK_DIR" >/dev/null 2>&1 || true
       return 0
     fi
   else
@@ -914,7 +983,9 @@ run_repair_playbook() {
   fi
 
   send_telegram "❌ 潤天蟹修復後回報：修復失敗，需要人工介入。原因：${reason}"
-  state_set ".last_action_ts=${now} | .last_action=\"repair_failed\" | .last_reason=\"${reason}\" | .last_report=\"failed\""
+  state_set ".last_action_ts=${now} | .last_action=\"repair_failed\" | .last_reason=\"${reason}\" | .last_report=\"failed\" | .repair_in_progress=false | .repair_step=\"failed\" | .repair_updated_at=$(date +%s)"
+  trap - RETURN
+  rm -rf "$REPAIR_LOCK_DIR" >/dev/null 2>&1 || true
   return 1
 }
 
@@ -927,7 +998,8 @@ handle_command() {
   {
     case "$text" in
       "/status"|"/status@"*)
-        send_telegram_to_chat "$chat_id" "$(build_status_report)"
+        send_telegram_to_chat "$chat_id" "$(build_status_report)
+$(repair_status_summary)"
         ;;
       "/repair"|"/rescue"|"/fix"|"/repair@"*|"/rescue@"*|"/fix@"*)
         run_repair_playbook "telegram-command"
@@ -950,10 +1022,12 @@ handle_command() {
             run_repair_playbook "natural:${reason}"
             ;;
           diagnose)
-            send_telegram_to_chat "$chat_id" "$(build_status_report)"
+            send_telegram_to_chat "$chat_id" "$(build_status_report)
+$(repair_status_summary)"
             ;;
           status)
-            send_telegram_to_chat "$chat_id" "$(build_status_report)"
+            send_telegram_to_chat "$chat_id" "$(build_status_report)
+$(repair_status_summary)"
             ;;
           chat|*)
             reply="$(model_chat_reply "$text")"
