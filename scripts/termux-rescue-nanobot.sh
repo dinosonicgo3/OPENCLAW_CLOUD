@@ -36,6 +36,8 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-1}"
 TELEGRAM_LONGPOLL_TIMEOUT="${TELEGRAM_LONGPOLL_TIMEOUT:-25}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-600}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-35}"
+OPENCLAW_REPLY_LAG_SECONDS="${OPENCLAW_REPLY_LAG_SECONDS:-300}"
+OPENCLAW_STUCK_TASK_SECONDS="${OPENCLAW_STUCK_TASK_SECONDS:-180}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
 NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-1800}"
@@ -123,6 +125,26 @@ truncate_telegram_text() {
   fi
 }
 
+detect_blocking_tasks() {
+  ps -eo pid,ppid,etimes,cmd 2>/dev/null \
+    | awk -v min="$OPENCLAW_STUCK_TASK_SECONDS" '
+      /@tobilu\/qmd\/dist\/qmd\.js embed/ || /node-llama-cpp/ || /cmake-js-llama/ {
+        if (($3 + 0) >= min) print
+      }' || true
+}
+
+remediate_blocking_tasks() {
+  local blockers
+  blockers="$(detect_blocking_tasks)"
+  [ -n "$blockers" ] || return 1
+  log "blocking tasks detected: $(printf '%s' "$blockers" | tr '\n' '; ')"
+  pkill -f "@tobilu/qmd/dist/qmd.js embed" >/dev/null 2>&1 || true
+  pkill -f "node-llama-cpp" >/dev/null 2>&1 || true
+  pkill -f "cmake-js-llama" >/dev/null 2>&1 || true
+  sleep 2
+  return 0
+}
+
 fetch_upstream_versions() {
   local npm_latest gh_tag gh_updated
   npm_latest="$(timeout 10s npm view openclaw version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
@@ -193,7 +215,7 @@ collect_openclaw_snapshot_json() {
 }
 
 build_status_report() {
-  local snapshot healthy port opid npid ver head stable npm_latest gh_tag issues
+  local snapshot healthy port opid npid ver head stable npm_latest gh_tag issues blockers
   snapshot="$(collect_openclaw_snapshot_json)"
   healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
   port="$(printf '%s' "$snapshot" | jq -r '.gateway_port')"
@@ -209,6 +231,7 @@ build_status_report() {
     | sed '/^null$/d;/^$/d' \
     | sanitize_issue_lines \
     | tail -n 6 || true)"
+  blockers="$(detect_blocking_tasks | head -n 3 || true)"
 
   printf '🦀 潤天蟹自動診斷報告\n'
   if [ "$healthy" = "true" ]; then
@@ -223,6 +246,29 @@ build_status_report() {
   if [ -n "$issues" ]; then
     printf -- '- 最近異常摘要:\n%s\n' "$(printf '%s' "$issues" | tail -n 6)"
   fi
+  if [ -n "$blockers" ]; then
+    printf -- '- 阻塞任務（>%ss）:\n%s\n' "$OPENCLAW_STUCK_TASK_SECONDS" "$blockers"
+  fi
+}
+
+rescue_manual_brief() {
+  cat <<'EOF'
+🦀 潤天蟹救援手冊（摘要）
+1) 先判斷是否「假健康」：
+- openclaw channels status --json
+- 檢查 telegram.running 必須為 true
+- 檢查 lastInboundAt 與 lastOutboundAt 是否長時間失衡
+2) 查阻塞任務（常見靜默根因）：
+- ps -eo pid,ppid,etimes,cmd | egrep 'qmd.js embed|node-llama-cpp|cmake-js-llama'
+- 超過門檻先中止阻塞，再測健康
+3) 修復順序：
+- coreguard --fix
+- restart openclaw
+- 還不行才 rebuild rescue
+4) 回報要求：
+- 修復前回報「原因+將執行步驟」
+- 修復後回報「結果+是否恢復+下一步」
+EOF
 }
 
 log() {
@@ -341,6 +387,26 @@ except OSError:
 finally:
     s.close()
 PY
+  local status_json running inbound outbound now lag
+  status_json="$($OPENCLAW_BIN channels status --json 2>/dev/null || true)"
+  [ -n "$status_json" ] || return 1
+  running="$(printf '%s' "$status_json" | jq -r '.channels.telegram.running // false' 2>/dev/null || echo false)"
+  [ "$running" = "true" ] || return 1
+
+  inbound="$(printf '%s' "$status_json" | jq -r '.channelAccounts.telegram[]? | select(.accountId=="default") | (.lastInboundAt // 0)' 2>/dev/null | head -n1)"
+  outbound="$(printf '%s' "$status_json" | jq -r '.channelAccounts.telegram[]? | select(.accountId=="default") | (.lastOutboundAt // 0)' 2>/dev/null | head -n1)"
+  inbound="${inbound:-0}"
+  outbound="${outbound:-0}"
+  now="$(date +%s)"
+  if [ "$inbound" -gt "$outbound" ] && [ "$inbound" -gt 0 ]; then
+    lag=$(( now - (inbound / 1000) ))
+    if [ "$lag" -gt "$OPENCLAW_REPLY_LAG_SECONDS" ]; then
+      return 1
+    fi
+  fi
+  if [ -n "$(detect_blocking_tasks)" ]; then
+    return 1
+  fi
 }
 
 restart_openclaw() {
@@ -463,7 +529,7 @@ model_chat_reply() {
       messages: [
         {
           role: "system",
-          content: "你是潤天蟹，OpenClaw 醫護兵。部署環境是 Oracle Cloud Ubuntu（非手機 Termux）。請用繁體中文簡潔回覆。你必須根據系統診斷資訊回答，不要叫使用者輸入斜線指令。若可直接處理，直接處理；若需要修復，清楚說明你將執行什麼。"
+          content: "你是潤天蟹，OpenClaw 戰地醫護兵。部署環境是 Oracle Cloud Ubuntu（非手機 Termux）。請用繁體中文簡潔回覆。你必須根據系統診斷資訊回答，不要叫使用者輸入斜線指令。若可直接處理，直接處理；若需要修復，先做根因判斷，再清楚說明你將執行什麼。優先檢查：1) telegram channel 是否 running 2) inbound/outbound 是否失衡 3) 是否有 qmd embed / node-llama-cpp / cmake-js-llama 阻塞任務。"
         },
         {
           role: "system",
@@ -544,6 +610,15 @@ run_repair_playbook() {
   send_telegram "🦀 潤天蟹修復前回報：開始修復流程。原因：${reason}"
   log "repair playbook start: reason=${reason}"
 
+  if remediate_blocking_tasks; then
+    send_telegram "🛠️ 潤天蟹：偵測到阻塞任務（QMD/編譯），已先中止阻塞任務。"
+    if openclaw_healthy; then
+      send_telegram "✅ 潤天蟹修復後回報：已解除阻塞，OpenClaw 恢復回應。原因：${reason}"
+      state_set ".last_action_ts=${now} | .last_action=\"unstick_tasks\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
+      return 0
+    fi
+  fi
+
   if [ -f "$CORE_GUARD_SCRIPT" ]; then
     bash "$CORE_GUARD_SCRIPT" --fix >>"$LOG_FILE" 2>&1 || true
   fi
@@ -583,6 +658,9 @@ handle_command() {
         ;;
       "/help"|"/help@"*)
         send_telegram_to_chat "$chat_id" "🦀 我會先自動診斷，再直接處理。你用自然語言描述需求即可。"
+        ;;
+      "/manual"|"/manual@"*)
+        send_telegram_to_chat "$chat_id" "$(rescue_manual_brief)"
         ;;
       *)
         classify_natural_intent "$text"
