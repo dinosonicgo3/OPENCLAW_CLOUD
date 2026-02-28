@@ -7,6 +7,8 @@ CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
 ACTION="${1:---fix}"
 BACKUP_DIR="${OPENCLAW_CONFIG_BACKUP_DIR:-$HOME/.openclaw/backups}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-$HOME/.npm-global/bin/openclaw}"
+ATOMIC_UPDATER="${OPENCLAW_ATOMIC_UPDATER:-$HOME/cloud/openclaw-config-atomic-update.sh}"
+BASELINE_PROFILE_PATH="${OPENCLAW_BASELINE_PROFILE_PATH:-$HOME/DINO_OPENCLAW/scripts/cloud/openclaw.stable.full.json}"
 mkdir -p "$BACKUP_DIR"
 
 if [ ! -f "$CONFIG_PATH" ]; then
@@ -230,6 +232,16 @@ if ! OPENCLAW_CONFIG_PATH="$TMP_OUT" "$OPENCLAW_BIN" config get gateway.port --j
 fi
 rm -f "$STRICT_OUT" "$STRICT_ERR"
 
+STATUS_OUT="$(mktemp)"
+STATUS_ERR="$(mktemp)"
+if ! OPENCLAW_CONFIG_PATH="$TMP_OUT" "$OPENCLAW_BIN" status --json >"$STATUS_OUT" 2>"$STATUS_ERR"; then
+  echo "[cloud-coreguard] candidate runtime validation failed; original unchanged" >&2
+  tail -n 80 "$STATUS_ERR" >&2 || true
+  rm -f "$TMP_OUT" "$STATUS_OUT" "$STATUS_ERR"
+  exit 3
+fi
+rm -f "$STATUS_OUT" "$STATUS_ERR"
+
 if [ "$ACTION" = "--check" ]; then
   cat "$TMP_OUT" >/dev/null
   rm -f "$TMP_OUT"
@@ -242,8 +254,18 @@ if [ "$ACTION" = "--check" ]; then
 fi
 
 ts="$(date +%Y%m%d-%H%M%S)"
-cp -f "$CONFIG_PATH" "$BACKUP_DIR/openclaw.json.bak.$ts"
-mv -f "$TMP_OUT" "$CONFIG_PATH"
-chmod 600 "$CONFIG_PATH" || true
-
-echo "[cloud-coreguard] fixed config ($status), backup=$BACKUP_DIR/openclaw.json.bak.$ts"
+if [ ! -x "$ATOMIC_UPDATER" ]; then
+  echo "[cloud-coreguard] atomic updater missing: $ATOMIC_UPDATER" >&2
+  rm -f "$TMP_OUT"
+  exit 3
+fi
+if ! OPENCLAW_BASELINE_PROFILE_PATH="$BASELINE_PROFILE_PATH" \
+     OPENCLAW_DISALLOW_MINIMAL_TEMPLATE=1 \
+     "$ATOMIC_UPDATER" --replace-with "$TMP_OUT" >/tmp/cloud-coreguard-atomic.$$ 2>/tmp/cloud-coreguard-atomic.$$.err; then
+  echo "[cloud-coreguard] atomic apply failed; original unchanged" >&2
+  tail -n 120 /tmp/cloud-coreguard-atomic.$$.err >&2 || true
+  rm -f /tmp/cloud-coreguard-atomic.$$ /tmp/cloud-coreguard-atomic.$$.err "$TMP_OUT"
+  exit 3
+fi
+rm -f /tmp/cloud-coreguard-atomic.$$ /tmp/cloud-coreguard-atomic.$$.err "$TMP_OUT"
+echo "[cloud-coreguard] fixed config ($status), backup saved by atomic updater, ts=$ts"

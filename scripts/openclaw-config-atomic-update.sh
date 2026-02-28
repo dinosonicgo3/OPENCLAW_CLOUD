@@ -5,6 +5,8 @@ CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
 BACKUP_DIR="${OPENCLAW_CONFIG_BACKUP_DIR:-$HOME/.openclaw/backups}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-$HOME/.npm-global/bin/openclaw}"
 SERVICE_NAME="${OPENCLAW_SERVICE_NAME:-openclaw.service}"
+BASELINE_PROFILE_PATH="${OPENCLAW_BASELINE_PROFILE_PATH:-$HOME/DINO_OPENCLAW/scripts/cloud/openclaw.stable.full.json}"
+DISALLOW_MINIMAL_TEMPLATE="${OPENCLAW_DISALLOW_MINIMAL_TEMPLATE:-1}"
 
 JQ_FILTER=""
 JQ_FILE=""
@@ -75,6 +77,15 @@ if [ ! -f "$CONFIG_PATH" ]; then
   exit 3
 fi
 
+if [ -n "$REPLACE_FILE" ] && [ "$DISALLOW_MINIMAL_TEMPLATE" = "1" ]; then
+  case "$REPLACE_FILE" in
+    */OpenClawVault/config/openclaw-template.json|*/OpenClawVault/config/openclaw-backup-20260226.json|*/OpenClawVault/config/openclaw-backup-20260227.json)
+      echo "Validation failed: replace-with source is a known minimal template/legacy backup and is blocked by policy." >&2
+      exit 6
+      ;;
+  esac
+fi
+
 mkdir -p "$BACKUP_DIR"
 LOCK_DIR="${CONFIG_PATH}.atomic.lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -129,6 +140,91 @@ import json, sys
 json.load(open(sys.argv[1], 'r', encoding='utf-8'))
 print('[atomic-update] candidate validation: strict+runtime ok')
 PY
+
+# 4) Policy validation: block minimal-template profile and accidental model shrink.
+POLICY_OUT="$TMP_DIR/policy.out"
+POLICY_ERR="$TMP_DIR/policy.err"
+if ! python3 - "$CANDIDATE" "$BASELINE_PROFILE_PATH" "$DISALLOW_MINIMAL_TEMPLATE" >"$POLICY_OUT" 2>"$POLICY_ERR" <<'PY'
+import json
+import pathlib
+import sys
+
+candidate_path = pathlib.Path(sys.argv[1])
+baseline_path = pathlib.Path(sys.argv[2])
+disallow_minimal = str(sys.argv[3]).strip().lower() in ("1", "true", "yes", "on")
+
+candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+
+def provider_models_count(obj, provider):
+    p = (((obj or {}).get("models") or {}).get("providers") or {}).get(provider)
+    if not isinstance(p, dict):
+        return 0
+    m = p.get("models")
+    return len(m) if isinstance(m, list) else 0
+
+def provider_model_ids(obj, provider):
+    p = (((obj or {}).get("models") or {}).get("providers") or {}).get(provider)
+    if not isinstance(p, dict):
+        return []
+    out = []
+    for item in (p.get("models") or []):
+        if isinstance(item, dict):
+            mid = str(item.get("id") or "").strip()
+            if mid:
+                out.append(mid)
+    return out
+
+def allow_count(obj):
+    allow = ((((obj or {}).get("agents") or {}).get("defaults") or {}).get("models"))
+    return len(allow) if isinstance(allow, dict) else 0
+
+openrouter_ids = provider_model_ids(candidate, "openrouter")
+known_minimal = {
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-pro-1.5",
+    "openai/gpt-4o",
+    "deepseek/deepseek-chat",
+}
+if disallow_minimal:
+    if len(openrouter_ids) <= 4 and set(openrouter_ids).issubset(known_minimal):
+        raise SystemExit("policy violation: candidate matches known minimal OpenRouter template signature")
+
+baseline = None
+if baseline_path.is_file():
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"policy violation: cannot parse baseline profile file: {baseline_path} ({exc})")
+
+checks = ["openrouter", "nvidia", "google", "opencode"]
+if baseline is not None:
+    for name in checks:
+        floor = provider_models_count(baseline, name)
+        if floor <= 0:
+            continue
+        have = provider_models_count(candidate, name)
+        if have < floor:
+            raise SystemExit(f"policy violation: provider {name} models shrank below baseline ({have} < {floor})")
+    allow_floor = allow_count(baseline)
+    if allow_floor > 0:
+        allow_have = allow_count(candidate)
+        if allow_have < allow_floor:
+            raise SystemExit(f"policy violation: allowlist shrank below baseline ({allow_have} < {allow_floor})")
+else:
+    # Fallback floor if baseline is absent.
+    if provider_models_count(candidate, "openrouter") < 20:
+        raise SystemExit("policy violation: openrouter model count too low without baseline (<20)")
+    if provider_models_count(candidate, "nvidia") < 4:
+        raise SystemExit("policy violation: nvidia model count too low without baseline (<4)")
+
+print("[atomic-update] candidate validation: profile policy ok")
+PY
+then
+  echo "Validation failed: candidate violates full-profile rescue policy." >&2
+  tail -n 80 "$POLICY_ERR" >&2 || true
+  exit 5
+fi
+cat "$POLICY_OUT"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[atomic-update] dry-run complete. Original config unchanged."

@@ -1,0 +1,2957 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.26",
+    "lastTouchedAt": "2026-02-28T00:24:04.201Z"
+  },
+  "update": {
+    "channel": "stable"
+  },
+  "models": {
+    "providers": {
+      "nvidia": {
+        "baseUrl": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "$NVIDIA_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "z-ai/glm4.7",
+            "name": "GLM 4.7 (NVIDIA)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm5",
+            "name": "GLM 5 (NVIDIA)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "Kimi K2.5 (NVIDIA)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-120b",
+            "name": "GPT-OSS 120B (NVIDIA)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+            "name": "NVIDIA Llama 3.1 Nemotron 70B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 4096
+          }
+        ]
+      },
+      "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKey": "$OPENROUTER_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "ai21/jamba-large-1.7",
+            "name": "AI21: Jamba Large 1.7",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "alibaba/tongyi-deepresearch-30b-a3b",
+            "name": "Tongyi DeepResearch 30B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "allenai/olmo-3.1-32b-instruct",
+            "name": "AllenAI: Olmo 3.1 32B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 65536,
+            "maxTokens": 8192
+          },
+          {
+            "id": "amazon/nova-2-lite-v1",
+            "name": "Amazon: Nova 2 Lite",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "amazon/nova-lite-v1",
+            "name": "Amazon: Nova Lite 1.0",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 300000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "amazon/nova-micro-v1",
+            "name": "Amazon: Nova Micro 1.0",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "amazon/nova-premier-v1",
+            "name": "Amazon: Nova Premier 1.0",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "amazon/nova-pro-v1",
+            "name": "Amazon: Nova Pro 1.0",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 300000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-3-haiku",
+            "name": "Anthropic: Claude 3 Haiku",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-3.5-haiku",
+            "name": "Anthropic: Claude 3.5 Haiku",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-3.5-sonnet",
+            "name": "Anthropic: Claude 3.5 Sonnet",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-3.7-sonnet",
+            "name": "Anthropic: Claude 3.7 Sonnet",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-3.7-sonnet:thinking",
+            "name": "Anthropic: Claude 3.7 Sonnet (thinking)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-haiku-4.5",
+            "name": "Anthropic: Claude Haiku 4.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-opus-4",
+            "name": "Anthropic: Claude Opus 4",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-opus-4.1",
+            "name": "Anthropic: Claude Opus 4.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-opus-4.5",
+            "name": "Anthropic: Claude Opus 4.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-opus-4.6",
+            "name": "Anthropic: Claude Opus 4.6",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-sonnet-4",
+            "name": "Anthropic: Claude Sonnet 4",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-sonnet-4.5",
+            "name": "Anthropic: Claude Sonnet 4.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-sonnet-4.6",
+            "name": "Anthropic: Claude Sonnet 4.6",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "arcee-ai/trinity-large-preview:free",
+            "name": "Arcee AI: Trinity Large Preview (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "arcee-ai/trinity-mini",
+            "name": "Arcee AI: Trinity Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "arcee-ai/trinity-mini:free",
+            "name": "Arcee AI: Trinity Mini (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "arcee-ai/virtuoso-large",
+            "name": "Arcee AI: Virtuoso Large",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "auto",
+            "name": "Auto",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 2000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "baidu/ernie-4.5-21b-a3b",
+            "name": "Baidu: ERNIE 4.5 21B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 120000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "baidu/ernie-4.5-vl-28b-a3b",
+            "name": "Baidu: ERNIE 4.5 VL 28B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 30000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "bytedance-seed/seed-1.6",
+            "name": "ByteDance Seed: Seed 1.6",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "bytedance-seed/seed-1.6-flash",
+            "name": "ByteDance Seed: Seed 1.6 Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "cohere/command-r-08-2024",
+            "name": "Cohere: Command R (08-2024)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "cohere/command-r-plus-08-2024",
+            "name": "Cohere: Command R+ (08-2024)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-chat",
+            "name": "DeepSeek: DeepSeek V3",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-chat-v3-0324",
+            "name": "DeepSeek: DeepSeek V3 0324",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-chat-v3.1",
+            "name": "DeepSeek: DeepSeek V3.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-r1",
+            "name": "DeepSeek: R1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 64000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-r1-0528",
+            "name": "DeepSeek: R1 0528",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-v3.1-terminus",
+            "name": "DeepSeek: DeepSeek V3.1 Terminus",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-v3.1-terminus:exacto",
+            "name": "DeepSeek: DeepSeek V3.1 Terminus (exacto)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-v3.2",
+            "name": "DeepSeek: DeepSeek V3.2",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek/deepseek-v3.2-exp",
+            "name": "DeepSeek: DeepSeek V3.2 Exp",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.0-flash-001",
+            "name": "Google: Gemini 2.0 Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.0-flash-lite-001",
+            "name": "Google: Gemini 2.0 Flash Lite",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.5-flash",
+            "name": "Google: Gemini 2.5 Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.5-flash-lite",
+            "name": "Google: Gemini 2.5 Flash Lite",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.5-flash-lite-preview-09-2025",
+            "name": "Google: Gemini 2.5 Flash Lite Preview 09-2025",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.5-pro",
+            "name": "Google: Gemini 2.5 Pro",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.5-pro-preview",
+            "name": "Google: Gemini 2.5 Pro Preview 06-05",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-2.5-pro-preview-05-06",
+            "name": "Google: Gemini 2.5 Pro Preview 05-06",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-3-flash-preview",
+            "name": "Google: Gemini 3 Flash Preview",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-3-pro-preview",
+            "name": "Google: Gemini 3 Pro Preview",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-3.1-pro-preview",
+            "name": "Google: Gemini 3.1 Pro Preview",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemini-3.1-pro-preview-customtools",
+            "name": "Google: Gemini 3.1 Pro Preview Custom Tools",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemma-3-27b-it",
+            "name": "Google: Gemma 3 27B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "google/gemma-3-27b-it:free",
+            "name": "Google: Gemma 3 27B (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "inception/mercury",
+            "name": "Inception: Mercury",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "inception/mercury-coder",
+            "name": "Inception: Mercury Coder",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "kwaipilot/kat-coder-pro",
+            "name": "Kwaipilot: KAT-Coder-Pro V1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meituan/longcat-flash-chat",
+            "name": "Meituan: LongCat Flash Chat",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-3-8b-instruct",
+            "name": "Meta: Llama 3 8B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 8192,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-3.1-405b-instruct",
+            "name": "Meta: Llama 3.1 405B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-3.1-70b-instruct",
+            "name": "Meta: Llama 3.1 70B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-3.1-8b-instruct",
+            "name": "Meta: Llama 3.1 8B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 16384,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-3.3-70b-instruct",
+            "name": "Meta: Llama 3.3 70B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-3.3-70b-instruct:free",
+            "name": "Meta: Llama 3.3 70B Instruct (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-4-maverick",
+            "name": "Meta: Llama 4 Maverick",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "meta-llama/llama-4-scout",
+            "name": "Meta: Llama 4 Scout",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 327680,
+            "maxTokens": 8192
+          },
+          {
+            "id": "minimax/minimax-m1",
+            "name": "MiniMax: MiniMax M1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "minimax/minimax-m2",
+            "name": "MiniMax: MiniMax M2",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 196608,
+            "maxTokens": 8192
+          },
+          {
+            "id": "minimax/minimax-m2.1",
+            "name": "MiniMax: MiniMax M2.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 196608,
+            "maxTokens": 8192
+          },
+          {
+            "id": "minimax/minimax-m2.5",
+            "name": "MiniMax: MiniMax M2.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 196608,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/codestral-2508",
+            "name": "Mistral: Codestral 2508",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/devstral-2512",
+            "name": "Mistral: Devstral 2 2512",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/devstral-medium",
+            "name": "Mistral: Devstral Medium",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/devstral-small",
+            "name": "Mistral: Devstral Small 1.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/ministral-14b-2512",
+            "name": "Mistral: Ministral 3 14B 2512",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/ministral-3b-2512",
+            "name": "Mistral: Ministral 3 3B 2512",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/ministral-8b-2512",
+            "name": "Mistral: Ministral 3 8B 2512",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-large",
+            "name": "Mistral Large",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-large-2407",
+            "name": "Mistral Large 2407",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-large-2411",
+            "name": "Mistral Large 2411",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-large-2512",
+            "name": "Mistral: Mistral Large 3 2512",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-medium-3",
+            "name": "Mistral: Mistral Medium 3",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-medium-3.1",
+            "name": "Mistral: Mistral Medium 3.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-nemo",
+            "name": "Mistral: Mistral Nemo",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-saba",
+            "name": "Mistral: Saba",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-small-24b-instruct-2501",
+            "name": "Mistral: Mistral Small 3",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-small-3.1-24b-instruct:free",
+            "name": "Mistral: Mistral Small 3.1 24B (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-small-3.2-24b-instruct",
+            "name": "Mistral: Mistral Small 3.2 24B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mistral-small-creative",
+            "name": "Mistral: Mistral Small Creative",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mixtral-8x22b-instruct",
+            "name": "Mistral: Mixtral 8x22B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 65536,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/mixtral-8x7b-instruct",
+            "name": "Mistral: Mixtral 8x7B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/pixtral-large-2411",
+            "name": "Mistral: Pixtral Large 2411",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mistralai/voxtral-small-24b-2507",
+            "name": "Mistral: Voxtral Small 24B 2507",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshotai/kimi-k2",
+            "name": "MoonshotAI: Kimi K2 0711",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshotai/kimi-k2-0905",
+            "name": "MoonshotAI: Kimi K2 0905",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshotai/kimi-k2-0905:exacto",
+            "name": "MoonshotAI: Kimi K2 0905 (exacto)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshotai/kimi-k2-thinking",
+            "name": "MoonshotAI: Kimi K2 Thinking",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "MoonshotAI: Kimi K2.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nex-agi/deepseek-v3.1-nex-n1",
+            "name": "Nex AGI: DeepSeek V3.1 Nex N1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+            "name": "NVIDIA: Llama 3.1 Nemotron 70B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+            "name": "NVIDIA: Llama 3.3 Nemotron Super 49B V1.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/nemotron-3-nano-30b-a3b",
+            "name": "NVIDIA: Nemotron 3 Nano 30B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+            "name": "NVIDIA: Nemotron 3 Nano 30B A3B (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+            "name": "NVIDIA: Nemotron Nano 12B 2 VL (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/nemotron-nano-9b-v2",
+            "name": "NVIDIA: Nemotron Nano 9B V2",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "nvidia/nemotron-nano-9b-v2:free",
+            "name": "NVIDIA: Nemotron Nano 9B V2 (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-3.5-turbo",
+            "name": "OpenAI: GPT-3.5 Turbo",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 16385,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-3.5-turbo-0613",
+            "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 4095,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-3.5-turbo-16k",
+            "name": "OpenAI: GPT-3.5 Turbo 16k",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 16385,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4",
+            "name": "OpenAI: GPT-4",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 8191,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4-0314",
+            "name": "OpenAI: GPT-4 (older v0314)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 8191,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4-1106-preview",
+            "name": "OpenAI: GPT-4 Turbo (older v1106)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4-turbo",
+            "name": "OpenAI: GPT-4 Turbo",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4-turbo-preview",
+            "name": "OpenAI: GPT-4 Turbo Preview",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4.1",
+            "name": "OpenAI: GPT-4.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1047576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4.1-mini",
+            "name": "OpenAI: GPT-4.1 Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1047576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4.1-nano",
+            "name": "OpenAI: GPT-4.1 Nano",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1047576,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o",
+            "name": "OpenAI: GPT-4o",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o-2024-05-13",
+            "name": "OpenAI: GPT-4o (2024-05-13)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o-2024-08-06",
+            "name": "OpenAI: GPT-4o (2024-08-06)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o-2024-11-20",
+            "name": "OpenAI: GPT-4o (2024-11-20)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o-audio-preview",
+            "name": "OpenAI: GPT-4o Audio",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o-mini",
+            "name": "OpenAI: GPT-4o-mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o-mini-2024-07-18",
+            "name": "OpenAI: GPT-4o-mini (2024-07-18)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-4o:extended",
+            "name": "OpenAI: GPT-4o (extended)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5",
+            "name": "OpenAI: GPT-5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5-codex",
+            "name": "OpenAI: GPT-5 Codex",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5-image",
+            "name": "OpenAI: GPT-5 Image",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5-image-mini",
+            "name": "OpenAI: GPT-5 Image Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5-mini",
+            "name": "OpenAI: GPT-5 Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5-nano",
+            "name": "OpenAI: GPT-5 Nano",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5-pro",
+            "name": "OpenAI: GPT-5 Pro",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.1",
+            "name": "OpenAI: GPT-5.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.1-chat",
+            "name": "OpenAI: GPT-5.1 Chat",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.1-codex",
+            "name": "OpenAI: GPT-5.1-Codex",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.1-codex-max",
+            "name": "OpenAI: GPT-5.1-Codex-Max",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.1-codex-mini",
+            "name": "OpenAI: GPT-5.1-Codex-Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.2",
+            "name": "OpenAI: GPT-5.2",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.2-chat",
+            "name": "OpenAI: GPT-5.2 Chat",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.2-codex",
+            "name": "OpenAI: GPT-5.2-Codex",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.2-pro",
+            "name": "OpenAI: GPT-5.2 Pro",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-5.3-codex",
+            "name": "OpenAI: GPT-5.3-Codex",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-120b",
+            "name": "OpenAI: gpt-oss-120b",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-120b:exacto",
+            "name": "OpenAI: gpt-oss-120b (exacto)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-120b:free",
+            "name": "OpenAI: gpt-oss-120b (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-20b",
+            "name": "OpenAI: gpt-oss-20b",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-20b:free",
+            "name": "OpenAI: gpt-oss-20b (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/gpt-oss-safeguard-20b",
+            "name": "OpenAI: gpt-oss-safeguard-20b",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o1",
+            "name": "OpenAI: o1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o3",
+            "name": "OpenAI: o3",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o3-deep-research",
+            "name": "OpenAI: o3 Deep Research",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o3-mini",
+            "name": "OpenAI: o3 Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o3-mini-high",
+            "name": "OpenAI: o3 Mini High",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o3-pro",
+            "name": "OpenAI: o3 Pro",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o4-mini",
+            "name": "OpenAI: o4 Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o4-mini-deep-research",
+            "name": "OpenAI: o4 Mini Deep Research",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openai/o4-mini-high",
+            "name": "OpenAI: o4 Mini High",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openrouter/auto",
+            "name": "Auto Router",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 2000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "openrouter/free",
+            "name": "Free Models Router",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "prime-intellect/intellect-3",
+            "name": "Prime Intellect: INTELLECT-3",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-2.5-72b-instruct",
+            "name": "Qwen2.5 72B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-2.5-7b-instruct",
+            "name": "Qwen: Qwen2.5 7B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-max",
+            "name": "Qwen: Qwen-Max ",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-plus",
+            "name": "Qwen: Qwen-Plus",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-plus-2025-07-28",
+            "name": "Qwen: Qwen Plus 0728",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-plus-2025-07-28:thinking",
+            "name": "Qwen: Qwen Plus 0728 (thinking)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-turbo",
+            "name": "Qwen: Qwen-Turbo",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen-vl-max",
+            "name": "Qwen: Qwen VL Max",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-14b",
+            "name": "Qwen: Qwen3 14B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 40960,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-235b-a22b",
+            "name": "Qwen: Qwen3 235B A22B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-235b-a22b-2507",
+            "name": "Qwen: Qwen3 235B A22B Instruct 2507",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-235b-a22b-thinking-2507",
+            "name": "Qwen: Qwen3 235B A22B Thinking 2507",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-30b-a3b",
+            "name": "Qwen: Qwen3 30B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 40960,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-30b-a3b-instruct-2507",
+            "name": "Qwen: Qwen3 30B A3B Instruct 2507",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-30b-a3b-thinking-2507",
+            "name": "Qwen: Qwen3 30B A3B Thinking 2507",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-32b",
+            "name": "Qwen: Qwen3 32B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 40960,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-4b:free",
+            "name": "Qwen: Qwen3 4B (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 40960,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-8b",
+            "name": "Qwen: Qwen3 8B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder",
+            "name": "Qwen: Qwen3 Coder 480B A35B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder-30b-a3b-instruct",
+            "name": "Qwen: Qwen3 Coder 30B A3B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 160000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder-flash",
+            "name": "Qwen: Qwen3 Coder Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder-next",
+            "name": "Qwen: Qwen3 Coder Next",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder-plus",
+            "name": "Qwen: Qwen3 Coder Plus",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder:exacto",
+            "name": "Qwen: Qwen3 Coder 480B A35B (exacto)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-coder:free",
+            "name": "Qwen: Qwen3 Coder 480B A35B (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-max",
+            "name": "Qwen: Qwen3 Max",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-max-thinking",
+            "name": "Qwen: Qwen3 Max Thinking",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-next-80b-a3b-instruct",
+            "name": "Qwen: Qwen3 Next 80B A3B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+            "name": "Qwen: Qwen3 Next 80B A3B Instruct (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-next-80b-a3b-thinking",
+            "name": "Qwen: Qwen3 Next 80B A3B Thinking",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-235b-a22b-instruct",
+            "name": "Qwen: Qwen3 VL 235B A22B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-235b-a22b-thinking",
+            "name": "Qwen: Qwen3 VL 235B A22B Thinking",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-30b-a3b-instruct",
+            "name": "Qwen: Qwen3 VL 30B A3B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-30b-a3b-thinking",
+            "name": "Qwen: Qwen3 VL 30B A3B Thinking",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-32b-instruct",
+            "name": "Qwen: Qwen3 VL 32B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-8b-instruct",
+            "name": "Qwen: Qwen3 VL 8B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3-vl-8b-thinking",
+            "name": "Qwen: Qwen3 VL 8B Thinking",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3.5-122b-a10b",
+            "name": "Qwen: Qwen3.5-122B-A10B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3.5-27b",
+            "name": "Qwen: Qwen3.5-27B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3.5-35b-a3b",
+            "name": "Qwen: Qwen3.5-35B-A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3.5-397b-a17b",
+            "name": "Qwen: Qwen3.5 397B A17B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3.5-flash-02-23",
+            "name": "Qwen: Qwen3.5-Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwen3.5-plus-02-15",
+            "name": "Qwen: Qwen3.5 Plus 2026-02-15",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen/qwq-32b",
+            "name": "Qwen: QwQ 32B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "relace/relace-search",
+            "name": "Relace: Relace Search",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "sao10k/l3-euryale-70b",
+            "name": "Sao10k: Llama 3 Euryale 70B v2.1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 8192,
+            "maxTokens": 8192
+          },
+          {
+            "id": "sao10k/l3.1-euryale-70b",
+            "name": "Sao10K: Llama 3.1 Euryale 70B v2.2",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "stepfun/step-3.5-flash",
+            "name": "StepFun: Step 3.5 Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "stepfun/step-3.5-flash:free",
+            "name": "StepFun: Step 3.5 Flash (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "thedrummer/rocinante-12b",
+            "name": "TheDrummer: Rocinante 12B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "thedrummer/unslopnemo-12b",
+            "name": "TheDrummer: UnslopNemo 12B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          },
+          {
+            "id": "tngtech/deepseek-r1t2-chimera",
+            "name": "TNG: DeepSeek R1T2 Chimera",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 163840,
+            "maxTokens": 8192
+          },
+          {
+            "id": "upstage/solar-pro-3:free",
+            "name": "Upstage: Solar Pro 3 (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-3",
+            "name": "xAI: Grok 3",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-3-beta",
+            "name": "xAI: Grok 3 Beta",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-3-mini",
+            "name": "xAI: Grok 3 Mini",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-3-mini-beta",
+            "name": "xAI: Grok 3 Mini Beta",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-4",
+            "name": "xAI: Grok 4",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-4-fast",
+            "name": "xAI: Grok 4 Fast",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 2000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-4.1-fast",
+            "name": "xAI: Grok 4.1 Fast",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 2000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "x-ai/grok-code-fast-1",
+            "name": "xAI: Grok Code Fast 1",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "xiaomi/mimo-v2-flash",
+            "name": "Xiaomi: MiMo-V2-Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4-32b",
+            "name": "Z.ai: GLM 4 32B ",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.5",
+            "name": "Z.ai: GLM 4.5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.5-air",
+            "name": "Z.ai: GLM 4.5 Air",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.5-air:free",
+            "name": "Z.ai: GLM 4.5 Air (free)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.5v",
+            "name": "Z.ai: GLM 4.5V",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 65536,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.6",
+            "name": "Z.ai: GLM 4.6",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 202752,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.6:exacto",
+            "name": "Z.ai: GLM 4.6 (exacto)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.6v",
+            "name": "Z.ai: GLM 4.6V",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.7",
+            "name": "Z.ai: GLM 4.7",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 202752,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-4.7-flash",
+            "name": "Z.ai: GLM 4.7 Flash",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 202752,
+            "maxTokens": 8192
+          },
+          {
+            "id": "z-ai/glm-5",
+            "name": "Z.ai: GLM 5",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "apiKey": "$GROQ_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "llama-3.3-70b-versatile",
+            "name": "Llama 3.3 70B Versatile (Groq)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "mixtral-8x7b-32768",
+            "name": "Mixtral 8x7B 32k (Groq)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32768,
+            "maxTokens": 32768
+          }
+        ]
+      },
+      "google": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "apiKey": "$GOOGLE_API_KEY",
+        "models": [
+          {
+            "id": "gemini-2.5-flash-lite-preview-09-2025",
+            "name": "Gemini 2.5 Flash Lite",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 2000000,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "siliconflow": {
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "apiKey": "$SILICONFLOW_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-ai/DeepSeek-V3",
+            "name": "DeepSeek V3 (SiliconFlow)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 64000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "Qwen/Qwen2.5-72B-Instruct",
+            "name": "Qwen 2.5 72B (SiliconFlow)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "modal": {
+        "baseUrl": "https://api.modal.com/v1",
+        "apiKey": "$MODAL_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "meta-llama/Llama-3.3-70B-Instruct",
+            "name": "Llama 3.3 70B (Modal)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V3",
+            "name": "DeepSeek V3 (Modal)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 64000,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "zai": {
+        "baseUrl": "https://api.zai.ai/v1",
+        "apiKey": "$ZAI_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "GLM-5",
+            "name": "GLM 5 (Z.ai)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "kimi": {
+        "baseUrl": "https://api.moonshot.cn/v1",
+        "apiKey": "$KIMI_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "moonshot-v1-128k",
+            "name": "Kimi Moonshot 128k",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "moonshot-v1-32k",
+            "name": "Kimi Moonshot 32k",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32000,
+            "maxTokens": 16384
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "nvidia/z-ai/glm4.7",
+        "fallbacks": []
+      },
+      "models": {
+        "nvidia/z-ai/glm4.7": {},
+        "nvidia/z-ai/glm5": {},
+        "nvidia/moonshotai/kimi-k2.5": {},
+        "nvidia/openai/gpt-oss-120b": {},
+        "nvidia/nvidia/llama-3.1-nemotron-70b-instruct": {},
+        "google/gemini-2.5-flash-lite-preview-09-2025": {},
+        "groq/llama-3.3-70b-versatile": {},
+        "google/gemini-3.1-pro-preview-customtools": {},
+        "google/gemini-2.5-flash-lite": {},
+        "nvidia/meta/llama-3.3-70b-instruct": {},
+        "google/gemini-2.5-flash-lite-preview-06-17": {},
+        "google/gemini-3.1-pro-preview": {},
+        "google/gemini-2.5-flash-preview-04-17": {},
+        "google/gemini-3-pro-preview": {},
+        "google/gemini-2.5-pro": {},
+        "google/gemini-3-flash-preview": {},
+        "google/gemini-2.5-flash": {},
+        "google/gemini-2.5-pro-preview-06-05": {},
+        "google/gemini-2.5-pro-preview-05-06": {},
+        "google/gemini-2.5-flash-preview-05-20": {},
+        "google/gemini-2.5-flash-preview-09-2025": {},
+        "openrouter/anthropic/claude-3.5-sonnet": {},
+        "openrouter/google/gemini-pro-1.5": {},
+        "openrouter/openai/gpt-4o": {},
+        "openrouter/deepseek/deepseek-chat": {},
+        "opencode/big-pickle": {},
+        "opencode/claude-3-5-haiku": {},
+        "opencode/claude-haiku-4-5": {},
+        "opencode/claude-opus-4-1": {},
+        "opencode/claude-opus-4-5": {},
+        "opencode/claude-opus-4-6": {},
+        "opencode/claude-sonnet-4": {},
+        "opencode/claude-sonnet-4-5": {},
+        "opencode/claude-sonnet-4-6": {},
+        "opencode/gemini-3-flash": {},
+        "opencode/gemini-3-pro": {},
+        "opencode/gemini-3.1-pro": {},
+        "opencode/glm-4.6": {},
+        "opencode/glm-4.7": {},
+        "opencode/glm-5": {},
+        "opencode/gpt-5": {},
+        "opencode/gpt-5-codex": {},
+        "opencode/gpt-5-nano": {},
+        "opencode/gpt-5.1": {},
+        "opencode/gpt-5.1-codex": {},
+        "opencode/gpt-5.1-codex-max": {},
+        "opencode/gpt-5.1-codex-mini": {},
+        "opencode/gpt-5.2": {},
+        "opencode/gpt-5.2-codex": {},
+        "opencode/gpt-5.3-codex": {},
+        "opencode/kimi-k2": {},
+        "opencode/kimi-k2-thinking": {},
+        "opencode/kimi-k2.5": {},
+        "opencode/minimax-m2.1": {},
+        "opencode/minimax-m2.5": {},
+        "opencode/minimax-m2.5-free": {},
+        "opencode/trinity-large-preview-free": {},
+        "openrouter/ai21/jamba-large-1.7": {},
+        "openrouter/alibaba/tongyi-deepresearch-30b-a3b": {},
+        "openrouter/allenai/olmo-3.1-32b-instruct": {},
+        "openrouter/amazon/nova-2-lite-v1": {},
+        "openrouter/amazon/nova-lite-v1": {},
+        "openrouter/amazon/nova-micro-v1": {},
+        "openrouter/amazon/nova-premier-v1": {},
+        "openrouter/amazon/nova-pro-v1": {},
+        "openrouter/anthropic/claude-3-haiku": {},
+        "openrouter/anthropic/claude-3.5-haiku": {},
+        "openrouter/anthropic/claude-3.7-sonnet": {},
+        "openrouter/anthropic/claude-3.7-sonnet:thinking": {},
+        "openrouter/anthropic/claude-haiku-4.5": {},
+        "openrouter/anthropic/claude-opus-4": {},
+        "openrouter/anthropic/claude-opus-4.1": {},
+        "openrouter/anthropic/claude-opus-4.5": {},
+        "openrouter/anthropic/claude-opus-4.6": {},
+        "openrouter/anthropic/claude-sonnet-4": {},
+        "openrouter/anthropic/claude-sonnet-4.5": {},
+        "openrouter/anthropic/claude-sonnet-4.6": {},
+        "openrouter/arcee-ai/trinity-large-preview:free": {},
+        "openrouter/arcee-ai/trinity-mini": {},
+        "openrouter/arcee-ai/trinity-mini:free": {},
+        "openrouter/arcee-ai/virtuoso-large": {},
+        "openrouter/auto": {},
+        "openrouter/baidu/ernie-4.5-21b-a3b": {},
+        "openrouter/baidu/ernie-4.5-vl-28b-a3b": {},
+        "openrouter/bytedance-seed/seed-1.6": {},
+        "openrouter/bytedance-seed/seed-1.6-flash": {},
+        "openrouter/cohere/command-r-08-2024": {},
+        "openrouter/cohere/command-r-plus-08-2024": {},
+        "openrouter/deepseek/deepseek-chat-v3-0324": {},
+        "openrouter/deepseek/deepseek-chat-v3.1": {},
+        "openrouter/deepseek/deepseek-r1": {},
+        "openrouter/deepseek/deepseek-r1-0528": {},
+        "openrouter/deepseek/deepseek-v3.1-terminus": {},
+        "openrouter/deepseek/deepseek-v3.1-terminus:exacto": {},
+        "openrouter/deepseek/deepseek-v3.2": {},
+        "openrouter/deepseek/deepseek-v3.2-exp": {},
+        "openrouter/google/gemini-2.0-flash-001": {},
+        "openrouter/google/gemini-2.0-flash-lite-001": {},
+        "openrouter/google/gemini-2.5-flash": {},
+        "openrouter/google/gemini-2.5-flash-lite": {},
+        "openrouter/google/gemini-2.5-flash-lite-preview-09-2025": {},
+        "openrouter/google/gemini-2.5-pro": {},
+        "openrouter/google/gemini-2.5-pro-preview": {},
+        "openrouter/google/gemini-2.5-pro-preview-05-06": {},
+        "openrouter/google/gemini-3-flash-preview": {},
+        "openrouter/google/gemini-3-pro-preview": {},
+        "openrouter/google/gemini-3.1-pro-preview": {},
+        "openrouter/google/gemini-3.1-pro-preview-customtools": {},
+        "openrouter/google/gemma-3-27b-it": {},
+        "openrouter/google/gemma-3-27b-it:free": {},
+        "openrouter/inception/mercury": {},
+        "openrouter/inception/mercury-coder": {},
+        "openrouter/kwaipilot/kat-coder-pro": {},
+        "openrouter/meituan/longcat-flash-chat": {},
+        "openrouter/meta-llama/llama-3-8b-instruct": {},
+        "openrouter/meta-llama/llama-3.1-405b-instruct": {},
+        "openrouter/meta-llama/llama-3.1-70b-instruct": {},
+        "openrouter/meta-llama/llama-3.1-8b-instruct": {},
+        "openrouter/meta-llama/llama-3.3-70b-instruct": {},
+        "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
+        "openrouter/meta-llama/llama-4-maverick": {},
+        "openrouter/meta-llama/llama-4-scout": {},
+        "openrouter/minimax/minimax-m1": {},
+        "openrouter/minimax/minimax-m2": {},
+        "openrouter/minimax/minimax-m2.1": {},
+        "openrouter/minimax/minimax-m2.5": {},
+        "openrouter/mistralai/codestral-2508": {},
+        "openrouter/mistralai/devstral-2512": {},
+        "openrouter/mistralai/devstral-medium": {},
+        "openrouter/mistralai/devstral-small": {},
+        "openrouter/mistralai/ministral-14b-2512": {},
+        "openrouter/mistralai/ministral-3b-2512": {},
+        "openrouter/mistralai/ministral-8b-2512": {},
+        "openrouter/mistralai/mistral-large": {},
+        "openrouter/mistralai/mistral-large-2407": {},
+        "openrouter/mistralai/mistral-large-2411": {},
+        "openrouter/mistralai/mistral-large-2512": {},
+        "openrouter/mistralai/mistral-medium-3": {},
+        "openrouter/mistralai/mistral-medium-3.1": {},
+        "openrouter/mistralai/mistral-nemo": {},
+        "openrouter/mistralai/mistral-saba": {},
+        "openrouter/mistralai/mistral-small-24b-instruct-2501": {},
+        "openrouter/mistralai/mistral-small-3.1-24b-instruct:free": {},
+        "openrouter/mistralai/mistral-small-3.2-24b-instruct": {},
+        "openrouter/mistralai/mistral-small-creative": {},
+        "openrouter/mistralai/mixtral-8x22b-instruct": {},
+        "openrouter/mistralai/mixtral-8x7b-instruct": {},
+        "openrouter/mistralai/pixtral-large-2411": {},
+        "openrouter/mistralai/voxtral-small-24b-2507": {},
+        "openrouter/moonshotai/kimi-k2": {},
+        "openrouter/moonshotai/kimi-k2-0905": {},
+        "openrouter/moonshotai/kimi-k2-0905:exacto": {},
+        "openrouter/moonshotai/kimi-k2-thinking": {},
+        "openrouter/moonshotai/kimi-k2.5": {},
+        "openrouter/nex-agi/deepseek-v3.1-nex-n1": {},
+        "openrouter/nvidia/llama-3.1-nemotron-70b-instruct": {},
+        "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1.5": {},
+        "openrouter/nvidia/nemotron-3-nano-30b-a3b": {},
+        "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": {},
+        "openrouter/nvidia/nemotron-nano-12b-v2-vl:free": {},
+        "openrouter/nvidia/nemotron-nano-9b-v2": {},
+        "openrouter/nvidia/nemotron-nano-9b-v2:free": {},
+        "openrouter/openai/gpt-3.5-turbo": {},
+        "openrouter/openai/gpt-3.5-turbo-0613": {},
+        "openrouter/openai/gpt-3.5-turbo-16k": {},
+        "openrouter/openai/gpt-4": {},
+        "openrouter/openai/gpt-4-0314": {},
+        "openrouter/openai/gpt-4-1106-preview": {},
+        "openrouter/openai/gpt-4-turbo": {},
+        "openrouter/openai/gpt-4-turbo-preview": {},
+        "openrouter/openai/gpt-4.1": {},
+        "openrouter/openai/gpt-4.1-mini": {},
+        "openrouter/openai/gpt-4.1-nano": {},
+        "openrouter/openai/gpt-4o-2024-05-13": {},
+        "openrouter/openai/gpt-4o-2024-08-06": {},
+        "openrouter/openai/gpt-4o-2024-11-20": {},
+        "openrouter/openai/gpt-4o-audio-preview": {},
+        "openrouter/openai/gpt-4o-mini": {},
+        "openrouter/openai/gpt-4o-mini-2024-07-18": {},
+        "openrouter/openai/gpt-4o:extended": {},
+        "openrouter/openai/gpt-5": {},
+        "openrouter/openai/gpt-5-codex": {},
+        "openrouter/openai/gpt-5-image": {},
+        "openrouter/openai/gpt-5-image-mini": {},
+        "openrouter/openai/gpt-5-mini": {},
+        "openrouter/openai/gpt-5-nano": {},
+        "openrouter/openai/gpt-5-pro": {},
+        "openrouter/openai/gpt-5.1": {},
+        "openrouter/openai/gpt-5.1-chat": {},
+        "openrouter/openai/gpt-5.1-codex": {},
+        "openrouter/openai/gpt-5.1-codex-max": {},
+        "openrouter/openai/gpt-5.1-codex-mini": {},
+        "openrouter/openai/gpt-5.2": {},
+        "openrouter/openai/gpt-5.2-chat": {},
+        "openrouter/openai/gpt-5.2-codex": {},
+        "openrouter/openai/gpt-5.2-pro": {},
+        "openrouter/openai/gpt-5.3-codex": {},
+        "openrouter/openai/gpt-oss-120b": {},
+        "openrouter/openai/gpt-oss-120b:exacto": {},
+        "openrouter/openai/gpt-oss-120b:free": {},
+        "openrouter/openai/gpt-oss-20b": {},
+        "openrouter/openai/gpt-oss-20b:free": {},
+        "openrouter/openai/gpt-oss-safeguard-20b": {},
+        "openrouter/openai/o1": {},
+        "openrouter/openai/o3": {},
+        "openrouter/openai/o3-deep-research": {},
+        "openrouter/openai/o3-mini": {},
+        "openrouter/openai/o3-mini-high": {},
+        "openrouter/openai/o3-pro": {},
+        "openrouter/openai/o4-mini": {},
+        "openrouter/openai/o4-mini-deep-research": {},
+        "openrouter/openai/o4-mini-high": {},
+        "openrouter/openrouter/auto": {},
+        "openrouter/openrouter/free": {},
+        "openrouter/prime-intellect/intellect-3": {},
+        "openrouter/qwen/qwen-2.5-72b-instruct": {},
+        "openrouter/qwen/qwen-2.5-7b-instruct": {},
+        "openrouter/qwen/qwen-max": {},
+        "openrouter/qwen/qwen-plus": {},
+        "openrouter/qwen/qwen-plus-2025-07-28": {},
+        "openrouter/qwen/qwen-plus-2025-07-28:thinking": {},
+        "openrouter/qwen/qwen-turbo": {},
+        "openrouter/qwen/qwen-vl-max": {},
+        "openrouter/qwen/qwen3-14b": {},
+        "openrouter/qwen/qwen3-235b-a22b": {},
+        "openrouter/qwen/qwen3-235b-a22b-2507": {},
+        "openrouter/qwen/qwen3-235b-a22b-thinking-2507": {},
+        "openrouter/qwen/qwen3-30b-a3b": {},
+        "openrouter/qwen/qwen3-30b-a3b-instruct-2507": {},
+        "openrouter/qwen/qwen3-30b-a3b-thinking-2507": {},
+        "openrouter/qwen/qwen3-32b": {},
+        "openrouter/qwen/qwen3-4b:free": {},
+        "openrouter/qwen/qwen3-8b": {},
+        "openrouter/qwen/qwen3-coder": {},
+        "openrouter/qwen/qwen3-coder-30b-a3b-instruct": {},
+        "openrouter/qwen/qwen3-coder-flash": {},
+        "openrouter/qwen/qwen3-coder-next": {},
+        "openrouter/qwen/qwen3-coder-plus": {},
+        "openrouter/qwen/qwen3-coder:exacto": {},
+        "openrouter/qwen/qwen3-coder:free": {},
+        "openrouter/qwen/qwen3-max": {},
+        "openrouter/qwen/qwen3-max-thinking": {},
+        "openrouter/qwen/qwen3-next-80b-a3b-instruct": {},
+        "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": {},
+        "openrouter/qwen/qwen3-next-80b-a3b-thinking": {},
+        "openrouter/qwen/qwen3-vl-235b-a22b-instruct": {},
+        "openrouter/qwen/qwen3-vl-235b-a22b-thinking": {},
+        "openrouter/qwen/qwen3-vl-30b-a3b-instruct": {},
+        "openrouter/qwen/qwen3-vl-30b-a3b-thinking": {},
+        "openrouter/qwen/qwen3-vl-32b-instruct": {},
+        "openrouter/qwen/qwen3-vl-8b-instruct": {},
+        "openrouter/qwen/qwen3-vl-8b-thinking": {},
+        "openrouter/qwen/qwen3.5-122b-a10b": {},
+        "openrouter/qwen/qwen3.5-27b": {},
+        "openrouter/qwen/qwen3.5-35b-a3b": {},
+        "openrouter/qwen/qwen3.5-397b-a17b": {},
+        "openrouter/qwen/qwen3.5-flash-02-23": {},
+        "openrouter/qwen/qwen3.5-plus-02-15": {},
+        "openrouter/qwen/qwq-32b": {},
+        "openrouter/relace/relace-search": {},
+        "openrouter/sao10k/l3-euryale-70b": {},
+        "openrouter/sao10k/l3.1-euryale-70b": {},
+        "openrouter/stepfun/step-3.5-flash": {},
+        "openrouter/stepfun/step-3.5-flash:free": {},
+        "openrouter/thedrummer/rocinante-12b": {},
+        "openrouter/thedrummer/unslopnemo-12b": {},
+        "openrouter/tngtech/deepseek-r1t2-chimera": {},
+        "openrouter/upstage/solar-pro-3:free": {},
+        "openrouter/x-ai/grok-3": {},
+        "openrouter/x-ai/grok-3-beta": {},
+        "openrouter/x-ai/grok-3-mini": {},
+        "openrouter/x-ai/grok-3-mini-beta": {},
+        "openrouter/x-ai/grok-4": {},
+        "openrouter/x-ai/grok-4-fast": {},
+        "openrouter/x-ai/grok-4.1-fast": {},
+        "openrouter/x-ai/grok-code-fast-1": {},
+        "openrouter/xiaomi/mimo-v2-flash": {},
+        "openrouter/z-ai/glm-4-32b": {},
+        "openrouter/z-ai/glm-4.5": {},
+        "openrouter/z-ai/glm-4.5-air": {},
+        "openrouter/z-ai/glm-4.5-air:free": {},
+        "openrouter/z-ai/glm-4.5v": {},
+        "openrouter/z-ai/glm-4.6": {},
+        "openrouter/z-ai/glm-4.6:exacto": {},
+        "openrouter/z-ai/glm-4.6v": {},
+        "openrouter/z-ai/glm-4.7": {},
+        "openrouter/z-ai/glm-4.7-flash": {},
+        "openrouter/z-ai/glm-5": {}
+      },
+      "workspace": "/home/ubuntu/OpenClawVault",
+      "memorySearch": {
+        "provider": "local",
+        "fallback": "none",
+        "local": {
+          "modelCacheDir": "/home/ubuntu/.cache/openclaw/models"
+        },
+        "store": {
+          "vector": {
+            "enabled": true
+          }
+        },
+        "query": {
+          "hybrid": {
+            "enabled": true,
+            "vectorWeight": 0.65,
+            "textWeight": 0.35
+          }
+        }
+      },
+      "compaction": {
+        "mode": "safeguard",
+        "reserveTokensFloor": 20000,
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": 4000,
+          "prompt": "Write any lasting notes, rules, facts or preferences to memory/YYYY-MM-DD.md or MEMORY.md. Reply NO_REPLY if nothing to store."
+        }
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "groups": {},
+      "allowFrom": [
+        "6002298888"
+      ],
+      "groupPolicy": "disabled",
+      "streaming": "off",
+      "botToken": "$TELEGRAM_BOT_TOKEN"
+    }
+  },
+  "gateway": {
+    "port": 29876,
+    "mode": "local",
+    "bind": "lan",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://10.0.0.118:29876",
+        "http://localhost:29876",
+        "http://127.0.0.1:29876",
+        "http://158.178.238.13:29876"
+      ],
+      "dangerouslyAllowHostHeaderOriginFallback": false
+    },
+    "auth": {
+      "mode": "token",
+      "token": "$OPENCLAW_GATEWAY_TOKEN",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  },
+  "secrets": {
+    "providers": {
+      "default": {
+        "source": "env"
+      }
+    },
+    "defaults": {
+      "env": "default"
+    }
+  }
+}
