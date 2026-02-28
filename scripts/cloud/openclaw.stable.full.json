@@ -2578,7 +2578,6 @@
         "nvidia/z-ai/glm4.7": {},
         "nvidia/z-ai/glm5": {},
         "nvidia/moonshotai/kimi-k2.5": {},
-        "nvidia/openai/gpt-oss-120b": {},
         "nvidia/nvidia/llama-3.1-nemotron-70b-instruct": {},
         "google/gemini-2.5-flash-lite-preview-09-2025": {},
         "groq/llama-3.3-70b-versatile": {},
@@ -2772,9 +2771,6 @@
         "openrouter/openai/gpt-5.2-codex": {},
         "openrouter/openai/gpt-5.2-pro": {},
         "openrouter/openai/gpt-5.3-codex": {},
-        "openrouter/openai/gpt-oss-120b": {},
-        "openrouter/openai/gpt-oss-120b:exacto": {},
-        "openrouter/openai/gpt-oss-120b:free": {},
         "openrouter/openai/gpt-oss-20b": {},
         "openrouter/openai/gpt-oss-20b:free": {},
         "openrouter/openai/gpt-oss-safeguard-20b": {},
@@ -2862,7 +2858,11 @@
         "openrouter/z-ai/glm-4.6v": {},
         "openrouter/z-ai/glm-4.7": {},
         "openrouter/z-ai/glm-4.7-flash": {},
-        "openrouter/z-ai/glm-5": {}
+        "openrouter/z-ai/glm-5": {},
+        "nvidia/openai/gpt-oss-120b": {},
+        "openrouter/openai/gpt-oss-120b": {},
+        "openrouter/openai/gpt-oss-120b:free": {},
+        "openrouter/openai/gpt-oss-120b:exacto": {}
       },
       "workspace": "/home/ubuntu/OpenClawVault",
       "memorySearch": {
@@ -2892,6 +2892,12 @@
           "softThresholdTokens": 4000,
           "prompt": "Write any lasting notes, rules, facts or preferences to memory/YYYY-MM-DD.md or MEMORY.md. Reply NO_REPLY if nothing to store."
         }
+      },
+      "subagents": {
+        "model": "nvidia/z-ai/glm4.7",
+        "runTimeoutSeconds": 900,
+        "announceTimeoutMs": 180000,
+        "maxConcurrent": 6
       }
     }
   },

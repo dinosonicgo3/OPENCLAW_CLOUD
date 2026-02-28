@@ -184,6 +184,7 @@ required_allow = {
     'nvidia/z-ai/glm4.7',
     'nvidia/z-ai/glm5',
     'nvidia/moonshotai/kimi-k2.5',
+    'nvidia/openai/gpt-oss-120b',
     'nvidia/meta/llama-3.3-70b-instruct',
     'google/gemini-2.5-flash',
     'google/gemini-2.5-flash-lite',
@@ -222,17 +223,6 @@ for pname in ('openrouter', 'opencode'):
         if key not in allow:
             allow[key] = {}
             changed = True
-
-blocked_allow = {
-    'nvidia/openai/gpt-oss-120b',
-    'openrouter/openai/gpt-oss-120b',
-    'openrouter/openai/gpt-oss-120b:free',
-    'openrouter/openai/gpt-oss-120b:exacto',
-}
-for key in list(allow.keys()):
-    if key in blocked_allow:
-        del allow[key]
-        changed = True
 
 out.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print('changed=1' if changed else 'changed=0')
