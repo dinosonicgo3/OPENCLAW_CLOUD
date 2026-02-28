@@ -245,7 +245,7 @@ detect_stale_artifacts() {
   fi
 
   stale_locks="$(find "$HOME_DIR/.openclaw" "$STATE_DIR" -maxdepth 4 -type f \
-    \( -name '*gateway*.lock' -o -name '*update*.lock' -o -name '*maintenance*.lock' -o -name '*.pid' \) \
+    \( -name '*gateway*.lock' -o -name '*update*.lock' -o -name '*maintenance*.lock' \) \
     -mmin +"$stale_min" 2>/dev/null | head -n 8 || true)"
 
   if [ -n "$stale_pid" ]; then
@@ -254,6 +254,42 @@ detect_stale_artifacts() {
   if [ -n "$stale_locks" ]; then
     printf '%s\n' "$stale_locks"
   fi
+}
+
+humanize_reason() {
+  local reason="${1:-}"
+  case "$reason" in
+    "") echo "" ;;
+    process-not-running) echo "主服務程序未運行。" ;;
+    gateway-port-unreachable:*) echo "主服務連接埠無法連線。" ;;
+    channels-status-empty) echo "無法讀取通道狀態（回傳為空）。" ;;
+    telegram-channel-not-running) echo "Telegram 通道目前未連線。" ;;
+    reply-lag-exceeded:*) echo "收到訊息後超過預期時間仍未回覆。" ;;
+    gateway-health-rpc-failed) echo "Gateway 健康檢查失敗。" ;;
+    timeout-storm-warning:*) echo "近期逾時訊息偏多（警示，不一定代表當機）。" ;;
+    blocking-task-detected) echo "偵測到阻塞任務（長任務卡住）。" ;;
+    stale-artifacts-detected) echo "偵測到舊鎖檔或殘留檔案（可能是先前重啟遺留）。" ;;
+    *) echo "系統回報異常：${reason}" ;;
+  esac
+}
+
+humanize_issue_lines() {
+  while IFS= read -r line; do
+    case "$line" in
+      *"edit failed: Could not find the exact text"*)
+        echo "嘗試修改記憶檔時，找不到完全匹配的原文片段（屬於編輯失敗，非服務當機）。"
+        ;;
+      *"No API key found for provider"*)
+        echo "模型金鑰未載入，暫時無法呼叫模型。"
+        ;;
+      *"gateway closed"*)
+        echo "Gateway 連線中斷（通常是重啟瞬間或短暫斷線）。"
+        ;;
+      *)
+        echo "$line"
+        ;;
+    esac
+  done
 }
 
 remediate_stale_artifacts() {
@@ -272,6 +308,7 @@ remediate_stale_artifacts() {
 
   while IFS= read -r file; do
     [ -n "$file" ] || continue
+    [ -f "$file" ] || continue
     case "$file" in
       *".lock"|*".pid")
         rm -f "$file" >/dev/null 2>&1 || true
@@ -424,7 +461,7 @@ collect_openclaw_snapshot_json() {
 }
 
 build_status_report() {
-  local snapshot healthy port opid npid ver head stable npm_latest gh_tag official_url repo_slug issues blockers reason timeout_events stale
+  local snapshot healthy port opid npid ver head stable npm_latest gh_tag official_url repo_slug issues blockers reason reason_text timeout_events stale
   snapshot="$(collect_openclaw_snapshot_json)"
   healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
   port="$(printf '%s' "$snapshot" | jq -r '.gateway_port')"
@@ -438,20 +475,22 @@ build_status_report() {
   official_url="$(printf '%s' "$snapshot" | jq -r '.upstream.official_github_url // ""')"
   repo_slug="$(printf '%s' "$snapshot" | jq -r '.upstream.github_repo // ""')"
   reason="$(printf '%s' "$snapshot" | jq -r '.unhealthy_reason // ""')"
+  reason_text="$(humanize_reason "$reason")"
   timeout_events="$(printf '%s' "$snapshot" | jq -r '.timeout_events // 0')"
   stale="$(printf '%s' "$snapshot" | jq -r '.stale_artifacts // ""')"
   issues="$(printf '%s' "$snapshot" \
     | jq -r '.recent_gateway_errors, .recent_runtime_errors' 2>/dev/null \
     | sed '/^null$/d;/^$/d' \
     | sanitize_issue_lines \
+    | humanize_issue_lines \
     | tail -n 6 || true)"
   blockers="$(detect_blocking_tasks | head -n 3 || true)"
 
   printf '🦀 潤天蟹自動診斷報告\n'
   if [ "$healthy" = "true" ]; then
-    printf -- '- OpenClaw: 正常（port=%s, pid=%s）\n' "$port" "${opid:-n/a}"
+    printf -- '- OpenClaw: 正常（連接埠=%s, 程序=%s）\n' "$port" "${opid:-n/a}"
   else
-    printf -- '- OpenClaw: 異常（port=%s, pid=%s）\n' "$port" "${opid:-n/a}"
+    printf -- '- OpenClaw: 異常（連接埠=%s, 程序=%s）\n' "$port" "${opid:-n/a}"
   fi
   printf -- '- Nanobot: 在線（pid=%s）\n' "${npid:-n/a}"
   printf -- '- 環境: %s\n' "${NANOBOT_RUNTIME_ENV}"
@@ -473,22 +512,23 @@ build_status_report() {
     printf -- '- 陳舊鎖/殘留檔:\n%s\n' "$(printf '%s' "$stale" | tail -n 6)"
   fi
   if [ "$healthy" != "true" ] && [ -n "$reason" ]; then
-    printf -- '- 判定原因: %s\n' "$reason"
+    printf -- '- 判定原因: %s\n' "${reason_text:-$reason}"
   elif [ "$healthy" = "true" ] && [ -n "$reason" ]; then
-    printf -- '- 風險提示: %s\n' "$reason"
+    printf -- '- 風險提示: %s\n' "${reason_text:-$reason}"
   fi
 }
 
 build_brief_status_line() {
-  local snapshot healthy port reason
+  local snapshot healthy port reason reason_text
   snapshot="$(collect_openclaw_snapshot_json)"
   healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
   port="$(printf '%s' "$snapshot" | jq -r '.gateway_port // ""')"
   reason="$(printf '%s' "$snapshot" | jq -r '.unhealthy_reason // ""')"
+  reason_text="$(humanize_reason "$reason")"
   if [ "$healthy" = "true" ]; then
-    printf '目前 OpenClaw 正常運作（port=%s）。' "${port:-unknown}"
+    printf '目前 OpenClaw 正常運作（連接埠=%s）。' "${port:-unknown}"
   else
-    printf '目前 OpenClaw 異常（port=%s，原因=%s）。' "${port:-unknown}" "${reason:-unknown}"
+    printf '目前 OpenClaw 有異常（連接埠=%s）。原因：%s' "${port:-unknown}" "${reason_text:-系統暫時無法判定。}"
   fi
 }
 
