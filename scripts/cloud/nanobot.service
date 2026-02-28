@@ -1,0 +1,22 @@
+[Unit]
+Description=Runtianxie Nanobot Service
+After=network-online.target openclaw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment=HOME=/home/ubuntu
+Environment=PATH=/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TZ=Asia/Taipei
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+ExecStart=/home/ubuntu/DINO_OPENCLAW/scripts/termux-rescue-nanobot.sh --daemon
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

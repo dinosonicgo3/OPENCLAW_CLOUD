@@ -17,6 +17,8 @@ CORE_GUARD_SCRIPT="${CORE_GUARD_SCRIPT:-}"
 OPENCLAW_BOOT_SCRIPT="${OPENCLAW_BOOT_SCRIPT:-}"
 OPENCLAW_REBUILD_SCRIPT="${OPENCLAW_REBUILD_SCRIPT:-}"
 OPENCLAW_REPO_BRANCH="${OPENCLAW_REPO_BRANCH:-main}"
+OPENCLAW_SERVICE_NAME="${OPENCLAW_SERVICE_NAME:-openclaw.service}"
+OPENCLAW_REBUILD_SERVICE="${OPENCLAW_REBUILD_SERVICE:-openclaw.service}"
 NANOBOT_RUNTIME_ENV="${NANOBOT_RUNTIME_ENV:-auto}"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -38,6 +40,12 @@ HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-600}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-35}"
 OPENCLAW_REPLY_LAG_SECONDS="${OPENCLAW_REPLY_LAG_SECONDS:-300}"
 OPENCLAW_STUCK_TASK_SECONDS="${OPENCLAW_STUCK_TASK_SECONDS:-180}"
+OPENCLAW_HUNG_TASK_SECONDS="${OPENCLAW_HUNG_TASK_SECONDS:-900}"
+OPENCLAW_HUNG_TASK_CPU_MAX="${OPENCLAW_HUNG_TASK_CPU_MAX:-1.0}"
+OPENCLAW_TIMEOUT_STORM_LINES="${OPENCLAW_TIMEOUT_STORM_LINES:-1400}"
+OPENCLAW_TIMEOUT_STORM_THRESHOLD="${OPENCLAW_TIMEOUT_STORM_THRESHOLD:-6}"
+OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS="${OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS:-300}"
+OPENCLAW_STALE_LOCK_SECONDS="${OPENCLAW_STALE_LOCK_SECONDS:-1800}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
 NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-1800}"
@@ -46,6 +54,7 @@ MAX_TELEGRAM_TEXT_BYTES="${MAX_TELEGRAM_TEXT_BYTES:-3500}"
 NANOBOT_INCLUDE_UPSTREAM_CHECK="${NANOBOT_INCLUDE_UPSTREAM_CHECK:-0}"
 INTENT_CLASS="chat"
 INTENT_REASON="default"
+OPENCLAW_LAST_HEALTH_REASON=""
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -92,6 +101,16 @@ if [ -z "$OPENCLAW_BIN" ] && [ -x "$HOME_DIR/.npm-global/bin/openclaw" ]; then
 fi
 OPENCLAW_BIN="${OPENCLAW_BIN:-openclaw}"
 
+run_with_timeout() {
+  local sec="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${sec}s" "$@"
+  else
+    "$@"
+  fi
+}
+
 latest_openclaw_runtime_log() {
   {
     find /tmp/openclaw -maxdepth 1 -type f -name 'openclaw-*.log' 2>/dev/null
@@ -110,7 +129,7 @@ recent_error_excerpt() {
 sanitize_issue_lines() {
   sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' \
     | sed -E 's/[[:space:]]+/ /g; s/^ +//; s/ +$//' \
-    | grep -Eiv '(^\{)|(^\[)|("_meta")|(subsystem\\":)|(isError=false)|(memory embeddings: batch start)|(memory embeddings: query start)|(embedded run agent end)' \
+    | grep -Eiv '(^\{)|(^\[)|("_meta")|(subsystem\\":)|(isError=false)|(memory embeddings: batch start)|(memory embeddings: query start)|(embedded run agent end)|(timeoutMs)|(noOutputTimeoutMs)|(maxOutputBytes)' \
     | grep -Ei 'error|failed|timeout|exception|panic|denied|forbidden|unhealthy|crash|invalid|refused|conflict|429|500|503' \
     | awk 'length($0)>0 { print substr($0,1,220) }' || true
 }
@@ -126,11 +145,141 @@ truncate_telegram_text() {
 }
 
 detect_blocking_tasks() {
-  ps -eo pid,ppid,etimes,cmd 2>/dev/null \
-    | awk -v min="$OPENCLAW_STUCK_TASK_SECONDS" '
-      /@tobilu\/qmd\/dist\/qmd\.js embed/ || /node-llama-cpp/ || /cmake-js-llama/ {
-        if (($3 + 0) >= min) print
+  local openclaw_roots
+  openclaw_roots="$(pgrep -f 'openclaw-gateway|openclaw gateway|(^|[[:space:]])openclaw([[:space:]]|$)' 2>/dev/null | tr '\n' ' ' || true)"
+  ps -eo pid,ppid,etimes,pcpu,cmd 2>/dev/null \
+    | awk -v minKnown="$OPENCLAW_STUCK_TASK_SECONDS" -v minHung="$OPENCLAW_HUNG_TASK_SECONDS" -v cpuMax="$OPENCLAW_HUNG_TASK_CPU_MAX" -v roots="$openclaw_roots" '
+      BEGIN {
+        n=split(roots, arr, /[[:space:]]+/);
+        for (i=1; i<=n; i++) if (arr[i] != "") root[arr[i]] = 1;
+      }
+      {
+        pid=$1; ppid=$2; et=$3+0; cpu=$4+0;
+        cmd="";
+        for (i=5; i<=NF; i++) cmd = cmd (i==5 ? "" : " ") $i;
+
+        known_stuck=(cmd ~ /@tobilu\/qmd\/dist\/qmd\.js embed|node-llama-cpp|cmake-js-llama|playwright|puppeteer|chromium.*--headless|npm (install|update|ci)|pnpm (install|update)|git (clone|fetch|pull)|sqlite3 .*VACUUM|embedding|indexer|reindex/);
+        openclaw_child=(root[ppid] == 1);
+        generic_hung=(openclaw_child && et >= minHung && cpu <= cpuMax && cmd !~ /openclaw-gateway|openclaw gateway|termux-rescue-nanobot|webhook_skeleton/);
+
+        if ((known_stuck && et >= minKnown) || generic_hung) print $0;
       }' || true
+}
+
+count_timeout_events() {
+  local runtime_log="$1" gateway_log="$2"
+  python - "$runtime_log" "$gateway_log" "$OPENCLAW_TIMEOUT_STORM_LINES" "$OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS" <<'PY' 2>/dev/null || echo 0
+import collections
+import datetime as dt
+import re
+import sys
+
+runtime_log, gateway_log, max_lines, window_sec = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+pattern = re.compile(r'embedded run timeout|FailoverError: LLM request timed out|lane task error: .*timed out|tool.*timeout|timed out|timeout', re.I)
+json_ts = re.compile(r'"time":"([^"]+)"')
+iso_ts = re.compile(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)')
+now = dt.datetime.now(dt.timezone.utc)
+
+def tail_lines(path, n):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return list(collections.deque(f, maxlen=n))
+    except Exception:
+        return []
+
+def parse_ts(line):
+    m = json_ts.search(line)
+    if not m:
+        m = iso_ts.search(line)
+    if not m:
+        return None
+    raw = m.group(1).replace("Z", "+00:00")
+    try:
+        return dt.datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+strict_timeout = re.compile(r'embedded run timeout|FailoverError: LLM request timed out|lane task error: .*timed out|getUpdates.*timed out|request timed out|ETIMEDOUT|ECONNRESET', re.I)
+count = 0
+for path in (runtime_log, gateway_log):
+    for line in tail_lines(path, max_lines):
+        if not strict_timeout.search(line):
+            continue
+        ts = parse_ts(line)
+        if ts is None:
+            count += 1
+            continue
+        if (now - ts).total_seconds() <= window_sec:
+            count += 1
+
+print(count)
+PY
+}
+
+detect_stale_artifacts() {
+  local stale_min stale_pid stale_locks
+  stale_min=$(( OPENCLAW_STALE_LOCK_SECONDS / 60 ))
+  [ "$stale_min" -lt 1 ] && stale_min=1
+
+  stale_pid=""
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pid" ] && ! kill -0 "$pid" >/dev/null 2>&1; then
+      stale_pid="stale nanobot pid file: $PID_FILE=>$pid"
+    fi
+  fi
+
+  stale_locks="$(find "$HOME_DIR/.openclaw" "$STATE_DIR" -maxdepth 4 -type f \
+    \( -name '*gateway*.lock' -o -name '*update*.lock' -o -name '*maintenance*.lock' -o -name '*.pid' \) \
+    -mmin +"$stale_min" 2>/dev/null | head -n 8 || true)"
+
+  if [ -n "$stale_pid" ]; then
+    printf '%s\n' "$stale_pid"
+  fi
+  if [ -n "$stale_locks" ]; then
+    printf '%s\n' "$stale_locks"
+  fi
+}
+
+remediate_stale_artifacts() {
+  local artifacts removed pid
+  artifacts="$(detect_stale_artifacts)"
+  [ -n "$artifacts" ] || return 1
+  removed=0
+
+  if [ -f "$PID_FILE" ]; then
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pid" ] && ! kill -0 "$pid" >/dev/null 2>&1; then
+      rm -f "$PID_FILE" >/dev/null 2>&1 || true
+      removed=1
+    fi
+  fi
+
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    case "$file" in
+      *".lock"|*".pid")
+        rm -f "$file" >/dev/null 2>&1 || true
+        removed=1
+        ;;
+    esac
+  done <<EOF
+$artifacts
+EOF
+
+  [ "$removed" -eq 1 ]
+}
+
+gateway_health_ok() {
+  local health_json
+  health_json="$(run_with_timeout "$HEALTH_TIMEOUT_SECONDS" "$OPENCLAW_BIN" health --json 2>/dev/null || true)"
+  [ -n "$health_json" ] || return 1
+  printf '%s' "$health_json" | jq -e '.ok == true or .healthy == true or .status == "ok"' >/dev/null 2>&1
+}
+
+enforce_stable_model_defaults() {
+  run_with_timeout 25 "$OPENCLAW_BIN" models set "nvidia/z-ai/glm4.7" --agent main >/dev/null 2>&1 || true
 }
 
 remediate_blocking_tasks() {
@@ -141,13 +290,35 @@ remediate_blocking_tasks() {
   pkill -f "@tobilu/qmd/dist/qmd.js embed" >/dev/null 2>&1 || true
   pkill -f "node-llama-cpp" >/dev/null 2>&1 || true
   pkill -f "cmake-js-llama" >/dev/null 2>&1 || true
+  pkill -f "playwright" >/dev/null 2>&1 || true
+  pkill -f "puppeteer" >/dev/null 2>&1 || true
+  pkill -f "chromium.*--headless" >/dev/null 2>&1 || true
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    local pid
+    pid="$(printf '%s' "$line" | awk '{print $1}')"
+    [ -n "$pid" ] || continue
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  done <<EOF
+$blockers
+EOF
+  sleep 2
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    local pid
+    pid="$(printf '%s' "$line" | awk '{print $1}')"
+    [ -n "$pid" ] || continue
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+  done <<EOF
+$blockers
+EOF
   sleep 2
   return 0
 }
 
 fetch_upstream_versions() {
   local npm_latest gh_tag gh_updated
-  npm_latest="$(timeout 10s npm view openclaw version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
+  npm_latest="$(run_with_timeout 10 npm view openclaw version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
   gh_tag="$(curl -fsS --max-time 10 "https://api.github.com/repos/${NANOBOT_GITHUB_REPO}/releases/latest" 2>/dev/null | jq -r '.tag_name // empty' || true)"
   gh_updated="$(curl -fsS --max-time 10 "https://api.github.com/repos/${NANOBOT_GITHUB_REPO}/releases/latest" 2>/dev/null | jq -r '.published_at // empty' || true)"
   jq -n --arg npm "$npm_latest" --arg gh "$gh_tag" --arg gh_updated "$gh_updated" \
@@ -156,7 +327,7 @@ fetch_upstream_versions() {
 
 collect_openclaw_snapshot_json() {
   local cfg gateway_port tmux_sessions openclaw_pid nanobot_pid healthy openclaw_ver git_head stable_tag runtime_log
-  local gateway_err runtime_err upstream_json
+  local gateway_err runtime_err upstream_json timeout_events stale_artifacts
   cfg="$HOME_DIR/.openclaw/openclaw.json"
   gateway_port="$OPENCLAW_PORT"
   if [ -f "$cfg" ]; then
@@ -164,7 +335,8 @@ collect_openclaw_snapshot_json() {
     [ -n "$gateway_port" ] || gateway_port="$OPENCLAW_PORT"
   fi
   gateway_port="${gateway_port:-18789}"
-  tmux_sessions="$(tmux ls 2>/dev/null | awk -F: '{print $1}' | jq -R . | jq -s . 2>/dev/null || echo '[]')"
+  tmux_sessions="$({ tmux ls 2>/dev/null || true; } | awk -F: '{print $1}' | jq -Rsc 'split("\n") | map(select(length>0))' 2>/dev/null || true)"
+  [ -n "$tmux_sessions" ] || tmux_sessions='[]'
   openclaw_pid="$(pgrep -f 'openclaw-gateway|openclaw gateway' | head -n1 || true)"
   nanobot_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   openclaw_ver="$("$OPENCLAW_BIN" --version 2>/dev/null | tr -d '\r' | tail -n1 || true)"
@@ -179,6 +351,8 @@ collect_openclaw_snapshot_json() {
 
   gateway_err="$(recent_error_excerpt "$HOME_DIR/openclaw-logs/gateway.log" | tail -n 6)"
   runtime_err="$(recent_error_excerpt "$runtime_log" | tail -n 6)"
+  timeout_events="$(count_timeout_events "$runtime_log" "$HOME_DIR/openclaw-logs/gateway.log")"
+  stale_artifacts="$(detect_stale_artifacts | tail -n 6 || true)"
   if [ "$NANOBOT_INCLUDE_UPSTREAM_CHECK" = "1" ]; then
     upstream_json="$(fetch_upstream_versions)"
   else
@@ -196,6 +370,9 @@ collect_openclaw_snapshot_json() {
     --arg runtime_log "${runtime_log:-}" \
     --arg gateway_err "$gateway_err" \
     --arg runtime_err "$runtime_err" \
+    --arg unhealthy_reason "${OPENCLAW_LAST_HEALTH_REASON:-}" \
+    --arg timeout_events "${timeout_events:-0}" \
+    --arg stale_artifacts "$stale_artifacts" \
     --argjson tmux "$tmux_sessions" \
     --argjson upstream "$upstream_json" \
     '{
@@ -210,12 +387,15 @@ collect_openclaw_snapshot_json() {
       tmux_sessions: $tmux,
       recent_gateway_errors: $gateway_err,
       recent_runtime_errors: $runtime_err,
+      unhealthy_reason: $unhealthy_reason,
+      timeout_events: ($timeout_events | tonumber? // 0),
+      stale_artifacts: $stale_artifacts,
       upstream: $upstream
     }'
 }
 
 build_status_report() {
-  local snapshot healthy port opid npid ver head stable npm_latest gh_tag issues blockers
+  local snapshot healthy port opid npid ver head stable npm_latest gh_tag issues blockers reason timeout_events stale
   snapshot="$(collect_openclaw_snapshot_json)"
   healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
   port="$(printf '%s' "$snapshot" | jq -r '.gateway_port')"
@@ -226,6 +406,9 @@ build_status_report() {
   stable="$(printf '%s' "$snapshot" | jq -r '.stable_tag // ""')"
   npm_latest="$(printf '%s' "$snapshot" | jq -r '.upstream.npm_latest // ""')"
   gh_tag="$(printf '%s' "$snapshot" | jq -r '.upstream.github_latest_tag // ""')"
+  reason="$(printf '%s' "$snapshot" | jq -r '.unhealthy_reason // ""')"
+  timeout_events="$(printf '%s' "$snapshot" | jq -r '.timeout_events // 0')"
+  stale="$(printf '%s' "$snapshot" | jq -r '.stale_artifacts // ""')"
   issues="$(printf '%s' "$snapshot" \
     | jq -r '.recent_gateway_errors, .recent_runtime_errors' 2>/dev/null \
     | sed '/^null$/d;/^$/d' \
@@ -246,8 +429,17 @@ build_status_report() {
   if [ -n "$issues" ]; then
     printf -- '- 最近異常摘要:\n%s\n' "$(printf '%s' "$issues" | tail -n 6)"
   fi
+  if [ "$timeout_events" -ge "$OPENCLAW_TIMEOUT_STORM_THRESHOLD" ]; then
+    printf -- '- 逾時風暴: %s（門檻=%s）\n' "$timeout_events" "$OPENCLAW_TIMEOUT_STORM_THRESHOLD"
+  fi
   if [ -n "$blockers" ]; then
-    printf -- '- 阻塞任務（>%ss）:\n%s\n' "$OPENCLAW_STUCK_TASK_SECONDS" "$blockers"
+    printf -- '- 阻塞任務（known>%ss / generic>%ss）:\n%s\n' "$OPENCLAW_STUCK_TASK_SECONDS" "$OPENCLAW_HUNG_TASK_SECONDS" "$blockers"
+  fi
+  if [ -n "$stale" ]; then
+    printf -- '- 陳舊鎖/殘留檔:\n%s\n' "$(printf '%s' "$stale" | tail -n 6)"
+  fi
+  if [ "$healthy" != "true" ] && [ -n "$reason" ]; then
+    printf -- '- 判定原因: %s\n' "$reason"
   fi
 }
 
@@ -259,13 +451,18 @@ rescue_manual_brief() {
 - 檢查 telegram.running 必須為 true
 - 檢查 lastInboundAt 與 lastOutboundAt 是否長時間失衡
 2) 查阻塞任務（常見靜默根因）：
-- ps -eo pid,ppid,etimes,cmd | egrep 'qmd.js embed|node-llama-cpp|cmake-js-llama'
-- 超過門檻先中止阻塞，再測健康
-3) 修復順序：
+- 先查 known blockers：qmd embed / llama build / playwright / puppeteer / headless chromium
+- 再查 generic blockers：OpenClaw 子進程低 CPU 長時間占用（hung）
+3) 查逾時風暴與殘留鎖：
+- runtime/gateway log 連續 timeout/FailoverError
+- stale lock/pid/maintenance artifacts
+4) 修復順序：
+- terminate blockers + clear stale artifacts
+- enforce stable model defaults
 - coreguard --fix
 - restart openclaw
 - 還不行才 rebuild rescue
-4) 回報要求：
+5) 回報要求：
 - 修復前回報「原因+將執行步驟」
 - 修復後回報「結果+是否恢復+下一步」
 EOF
@@ -367,12 +564,14 @@ stop_typing_loop() {
 }
 
 openclaw_healthy() {
+  OPENCLAW_LAST_HEALTH_REASON=""
   if ! pgrep -f "openclaw gateway" >/dev/null 2>&1 \
     && ! pgrep -f "openclaw-gateway" >/dev/null 2>&1 \
     && ! pgrep -x openclaw >/dev/null 2>&1; then
+    OPENCLAW_LAST_HEALTH_REASON="process-not-running"
     return 1
   fi
-  python - "$OPENCLAW_PORT" <<'PY'
+  if ! python - "$OPENCLAW_PORT" <<'PY'
 import socket
 import sys
 
@@ -387,11 +586,28 @@ except OSError:
 finally:
     s.close()
 PY
-  local status_json running inbound outbound now lag
-  status_json="$($OPENCLAW_BIN channels status --json 2>/dev/null || true)"
-  [ -n "$status_json" ] || return 1
-  running="$(printf '%s' "$status_json" | jq -r '.channels.telegram.running // false' 2>/dev/null || echo false)"
-  [ "$running" = "true" ] || return 1
+  then
+    OPENCLAW_LAST_HEALTH_REASON="gateway-port-unreachable:$OPENCLAW_PORT"
+    return 1
+  fi
+  local status_json running inbound outbound now lag tries
+  status_json=""
+  for tries in 1 2; do
+    status_json="$($OPENCLAW_BIN channels status --json 2>/dev/null || true)"
+    running="$(printf '%s' "$status_json" | jq -r '.channels.telegram.running // false' 2>/dev/null || echo false)"
+    if [ "$running" = "true" ]; then
+      break
+    fi
+    sleep 2
+  done
+  if [ -z "$status_json" ]; then
+    OPENCLAW_LAST_HEALTH_REASON="channels-status-empty"
+    return 1
+  fi
+  if [ "$running" != "true" ]; then
+    OPENCLAW_LAST_HEALTH_REASON="telegram-channel-not-running"
+    return 1
+  fi
 
   inbound="$(printf '%s' "$status_json" | jq -r '.channelAccounts.telegram[]? | select(.accountId=="default") | (.lastInboundAt // 0)' 2>/dev/null | head -n1)"
   outbound="$(printf '%s' "$status_json" | jq -r '.channelAccounts.telegram[]? | select(.accountId=="default") | (.lastOutboundAt // 0)' 2>/dev/null | head -n1)"
@@ -401,15 +617,43 @@ PY
   if [ "$inbound" -gt "$outbound" ] && [ "$inbound" -gt 0 ]; then
     lag=$(( now - (inbound / 1000) ))
     if [ "$lag" -gt "$OPENCLAW_REPLY_LAG_SECONDS" ]; then
+      OPENCLAW_LAST_HEALTH_REASON="reply-lag-exceeded:${lag}s"
       return 1
     fi
   fi
-  if [ -n "$(detect_blocking_tasks)" ]; then
+
+  if ! gateway_health_ok; then
+    OPENCLAW_LAST_HEALTH_REASON="gateway-health-rpc-failed"
     return 1
   fi
+
+  local runtime_log timeout_events
+  runtime_log="$(latest_openclaw_runtime_log)"
+  timeout_events="$(count_timeout_events "$runtime_log" "$HOME_DIR/openclaw-logs/gateway.log")"
+  if [ "${timeout_events:-0}" -ge "$OPENCLAW_TIMEOUT_STORM_THRESHOLD" ]; then
+    OPENCLAW_LAST_HEALTH_REASON="timeout-storm:${timeout_events}"
+    return 1
+  fi
+
+  if [ -n "$(detect_blocking_tasks)" ]; then
+    OPENCLAW_LAST_HEALTH_REASON="blocking-task-detected"
+    return 1
+  fi
+  if [ -n "$(detect_stale_artifacts)" ]; then
+    OPENCLAW_LAST_HEALTH_REASON="stale-artifacts-detected"
+    return 1
+  fi
+  OPENCLAW_LAST_HEALTH_REASON=""
 }
 
 restart_openclaw() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$OPENCLAW_SERVICE_NAME" >/dev/null 2>&1; then
+    sudo systemctl restart "$OPENCLAW_SERVICE_NAME" >/dev/null 2>&1 || true
+    sleep 10
+    openclaw_healthy
+    return $?
+  fi
+
   if [ ! -f "$OPENCLAW_BOOT_SCRIPT" ]; then
     log "boot script missing: $OPENCLAW_BOOT_SCRIPT"
     return 1
@@ -452,6 +696,7 @@ rebuild_rescue() {
   OPENCLAW_REBUILD_PRESERVE_STATE=1 \
   OPENCLAW_REBUILD_SKIP_WATCHDOG=1 \
   OPENCLAW_REBUILD_SKIP_NANOBOT=1 \
+  OPENCLAW_STACK_SERVICE="$OPENCLAW_REBUILD_SERVICE" \
   OPENCLAW_WATCHDOG_ENABLED=0 \
   NANOBOT_ENABLED=1 \
   NANOBOT_TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
@@ -559,9 +804,9 @@ classify_natural_intent() {
   INTENT_CLASS="chat"
   INTENT_REASON="natural-chat"
   text_norm="$(printf '%s' "$user_text" | tr '[:upper:]' '[:lower:]')"
-  if printf '%s' "$text_norm" | grep -Eiq '救援|修復|修好|修正|除錯|排錯|回滾|復原|掛了|當機|故障|失聯|沒反應|crash|broken|fix|repair|rescue'; then
-    INTENT_CLASS="repair"
-    INTENT_REASON="keyword-repair"
+  if printf '%s' "$text_norm" | grep -Eiq '狀態|健康|還在嗎|有沒有運作|運作嗎|在線|online|health|status'; then
+    INTENT_CLASS="status"
+    INTENT_REASON="keyword-status"
     return 0
   fi
   if printf '%s' "$text_norm" | grep -Eiq '日誌|log|後台|系統資訊|診斷|檢查|狀況|github|版本|更新|運行'; then
@@ -569,9 +814,14 @@ classify_natural_intent() {
     INTENT_REASON="keyword-diagnose"
     return 0
   fi
-  if printf '%s' "$text_norm" | grep -Eiq '狀態|健康|還在嗎|有沒有運作|運作嗎|在線|online|health|status'; then
-    INTENT_CLASS="status"
-    INTENT_REASON="keyword-status"
+  if printf '%s' "$text_norm" | grep -Eiq '回滾|重建|rollback|rebuild'; then
+    INTENT_CLASS="repair"
+    INTENT_REASON="keyword-rollback"
+    return 0
+  fi
+  if printf '%s' "$text_norm" | grep -Eiq '救援|修復|修好|修正|除錯|排錯|復原|掛了|當機|故障|失聯|沒反應|crash|broken|fix|repair|rescue'; then
+    INTENT_CLASS="repair"
+    INTENT_REASON="keyword-repair"
     return 0
   fi
   if [ -z "$NVIDIA_API_KEY" ]; then
@@ -605,18 +855,43 @@ classify_natural_intent() {
 }
 
 run_repair_playbook() {
-  local reason="$1" now
+  local reason="$1" now blockers timeout_events stale steps_msg allow_rebuild
   now="$(date +%s)"
-  send_telegram "🦀 潤天蟹修復前回報：開始修復流程。原因：${reason}"
+  blockers="$(detect_blocking_tasks | head -n 6 || true)"
+  timeout_events="$(count_timeout_events "$(latest_openclaw_runtime_log)" "$HOME_DIR/openclaw-logs/gateway.log")"
+  stale="$(detect_stale_artifacts | head -n 6 || true)"
+  steps_msg="1) terminate blockers 2) clear stale artifacts 3) enforce stable model 4) coreguard+restart 5) rebuild fallback"
+  send_telegram "🦀 潤天蟹修復前回報：開始修復流程。原因：${reason}
+診斷摘要：
+- blockers=$([ -n "$blockers" ] && echo yes || echo no)
+- timeout_events=${timeout_events}
+- stale_artifacts=$([ -n "$stale" ] && echo yes || echo no)
+執行步驟：${steps_msg}"
   log "repair playbook start: reason=${reason}"
+  allow_rebuild=0
+  case "$reason" in
+    telegram-command|*keyword-rollback*|*force-rebuild*) allow_rebuild=1 ;;
+  esac
 
   if remediate_blocking_tasks; then
-    send_telegram "🛠️ 潤天蟹：偵測到阻塞任務（QMD/編譯），已先中止阻塞任務。"
+    send_telegram "🛠️ 潤天蟹：偵測到阻塞任務，已先中止阻塞任務。"
     if openclaw_healthy; then
       send_telegram "✅ 潤天蟹修復後回報：已解除阻塞，OpenClaw 恢復回應。原因：${reason}"
       state_set ".last_action_ts=${now} | .last_action=\"unstick_tasks\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
       return 0
     fi
+  fi
+  if remediate_stale_artifacts; then
+    send_telegram "🧹 潤天蟹：已清理陳舊鎖檔/殘留 pid，準備再次健康檢查。"
+    if openclaw_healthy; then
+      send_telegram "✅ 潤天蟹修復後回報：清理殘留狀態後恢復正常。原因：${reason}"
+      state_set ".last_action_ts=${now} | .last_action=\"clear_stale_artifacts\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
+      return 0
+    fi
+  fi
+
+  if [ "${timeout_events:-0}" -ge "$OPENCLAW_TIMEOUT_STORM_THRESHOLD" ]; then
+    enforce_stable_model_defaults
   fi
 
   if [ -f "$CORE_GUARD_SCRIPT" ]; then
@@ -629,9 +904,13 @@ run_repair_playbook() {
     return 0
   fi
 
-  if rebuild_rescue "$reason"; then
-    state_set ".last_action_ts=${now} | .last_action=\"rebuild_rescue\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
-    return 0
+  if [ "$allow_rebuild" -eq 1 ]; then
+    if rebuild_rescue "$reason"; then
+      state_set ".last_action_ts=${now} | .last_action=\"rebuild_rescue\" | .last_reason=\"${reason}\" | .last_report=\"ok\" | .consecutive_health_failures=0"
+      return 0
+    fi
+  else
+    send_telegram "⚠️ 潤天蟹：已完成非破壞修復，但仍未恢復。為避免誤操作，未自動執行回滾重建。若要回滾，請明確下達「強制回滾」或 /repair。"
   fi
 
   send_telegram "❌ 潤天蟹修復後回報：修復失敗，需要人工介入。原因：${reason}"
