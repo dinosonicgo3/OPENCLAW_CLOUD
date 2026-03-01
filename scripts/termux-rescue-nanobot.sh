@@ -1217,16 +1217,25 @@ delegate_nanobot_self_fix_to_openclaw() {
 }
 
 is_internal_test_handoff() {
-  local type="${1:-}" reason="${2:-}" detail="${3:-}" all
-  all="$(printf '%s %s %s' "$type" "$reason" "$detail" | tr '[:upper:]' '[:lower:]')"
-  if printf '%s' "$all" | grep -Eq '(^|[^a-z])(noop|verify|smoke|smoke-test|test)([^a-z]|$)'; then
+  local from="${1:-}" type="${2:-}" reason="${3:-}" detail="${4:-}"
+  from="$(printf '%s' "$from" | tr '[:upper:]' '[:lower:]')"
+  type="$(printf '%s' "$type" | tr '[:upper:]' '[:lower:]')"
+  reason="$(printf '%s' "$reason" | tr '[:upper:]' '[:lower:]')"
+  detail="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
+  # Only suppress explicit internal tests. Real core-fix handoff must notify user.
+  [ "$from" = "test" ] && return 0
+  [ "$type" = "noop-test" ] && return 0
+  if [ "$type" = "openclaw-core-fix" ] || [ "$type" = "nanobot-core-fix" ]; then
+    return 1
+  fi
+  if [ "$reason" = "smoke" ] && printf '%s' "$detail" | grep -q 'smoke'; then
     return 0
   fi
   return 1
 }
 
 maybe_process_openclaw_handoff() {
-  local task id type reason detail result note
+  local task id from type reason detail result note
   if ! is_true_flag "$HANDOFF_ENABLED"; then
     return 0
   fi
@@ -1239,8 +1248,9 @@ maybe_process_openclaw_handoff() {
   detail="$(printf '%s' "$task" | jq -r '.detail // empty' 2>/dev/null || true)"
   [ -n "$id" ] || return 0
 
-  # Ignore internal smoke/verify/noop tasks quietly to avoid spamming user Telegram.
-  if is_internal_test_handoff "$type" "$reason" "$detail"; then
+  # Ignore only explicit internal test tasks quietly to avoid spamming user Telegram.
+  from="$(printf '%s' "$task" | jq -r '.from // empty' 2>/dev/null || true)"
+  if is_internal_test_handoff "$from" "$type" "$reason" "$detail"; then
     note="internal-test-ignored:${type}:${reason}"
     "$HANDOFF_SCRIPT" complete --id "$id" --status skipped --note "$note" --actor nanobot >/dev/null 2>&1 || true
     log "ignored internal test handoff: id=${id} type=${type} reason=${reason}"
