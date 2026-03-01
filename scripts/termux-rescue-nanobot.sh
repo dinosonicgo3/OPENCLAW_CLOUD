@@ -490,7 +490,7 @@ gateway_health_ok() {
 enforce_stable_model_defaults() {
   local primary
   primary="$(get_primary_model_from_config)"
-  primary="${primary:-nvidia/z-ai/glm4.7}"
+  primary="${primary:-nvidia/z-ai/glm5}"
   run_with_timeout 25 "$OPENCLAW_BIN" models set "$primary" --agent main >/dev/null 2>&1 || true
 }
 
