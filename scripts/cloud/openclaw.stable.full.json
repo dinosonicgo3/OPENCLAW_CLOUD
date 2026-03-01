@@ -2571,7 +2571,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "nvidia/z-ai/glm4.7",
+        "primary": "nvidia/z-ai/glm5",
         "fallbacks": []
       },
       "models": {
@@ -2894,7 +2894,7 @@
         }
       },
       "subagents": {
-        "model": "nvidia/z-ai/glm4.7",
+        "model": "nvidia/z-ai/glm5",
         "runTimeoutSeconds": 300,
         "announceTimeoutMs": 120000,
         "maxConcurrent": 3

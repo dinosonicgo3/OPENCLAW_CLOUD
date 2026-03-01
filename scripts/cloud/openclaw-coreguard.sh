@@ -97,7 +97,7 @@ if not isinstance(tele.get('allowFrom'), list):
 agents = ensure_dict(obj, 'agents')
 defs = ensure_dict(agents, 'defaults')
 model = ensure_dict(defs, 'model')
-primary_model = str(model.get('primary') or 'nvidia/z-ai/glm4.7').strip() or 'nvidia/z-ai/glm4.7'
+primary_model = str(model.get('primary') or 'nvidia/z-ai/glm5').strip() or 'nvidia/z-ai/glm5'
 set_value(model, 'primary', primary_model)
 if model.get('fallbacks') != []:
     model['fallbacks'] = []
@@ -181,7 +181,7 @@ if normalized != nvidia_models:
 
 allow = defs.get('models')
 required_allow = {
-    'nvidia/z-ai/glm4.7',
+    'nvidia/z-ai/glm5',
     'nvidia/z-ai/glm5',
     'nvidia/moonshotai/kimi-k2.5',
     'nvidia/openai/gpt-oss-120b',

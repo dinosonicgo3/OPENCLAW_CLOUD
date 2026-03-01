@@ -26,13 +26,15 @@ NANOBOT_RUNTIME_ENV="${NANOBOT_RUNTIME_ENV:-auto}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_OWNER_ID="${TELEGRAM_OWNER_ID:-}"
 NVIDIA_API_KEY="${NVIDIA_API_KEY:-}"
-NANOBOT_MODEL="${NANOBOT_MODEL:-z-ai/glm4.7}"
+NANOBOT_MODEL="${NANOBOT_MODEL:-nvidia/z-ai/glm5}"
 NANOBOT_BASE_URL="${NANOBOT_BASE_URL:-https://integrate.api.nvidia.com/v1}"
 NANOBOT_ENABLED="${NANOBOT_ENABLED:-0}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-}"
 NANOBOT_DIAG_LOG_LINES="${NANOBOT_DIAG_LOG_LINES:-60}"
 NANOBOT_GITHUB_REPO="${NANOBOT_GITHUB_REPO:-openclaw/openclaw}"
 OPENCLAW_OFFICIAL_GITHUB_URL="${OPENCLAW_OFFICIAL_GITHUB_URL:-https://github.com/openclaw/openclaw}"
+HANDOFF_SCRIPT="${HANDOFF_SCRIPT:-$REPO_DIR/scripts/cloud/ai-handoff.sh}"
+HANDOFF_ENABLED="${HANDOFF_ENABLED:-1}"
 
 # Keep nanobot mostly dormant: only react to user messages by default.
 AUTO_HEALTHCHECK_ENABLED="${AUTO_HEALTHCHECK_ENABLED:-0}"
@@ -122,6 +124,154 @@ run_with_timeout() {
   else
     "$@"
   fi
+}
+
+env_upsert_var() {
+  local file="$1" key="$2" value="$3" tmp
+  [ -n "$file" ] || return 1
+  [ -f "$file" ] || touch "$file"
+  tmp="$(mktemp)"
+  awk -v k="$key" -v v="$value" '
+    BEGIN { done=0 }
+    {
+      if ($0 ~ ("^" k "=")) {
+        print k "=\"" v "\""
+        done=1
+      } else {
+        print $0
+      }
+    }
+    END {
+      if (!done) print k "=\"" v "\""
+    }
+  ' "$file" >"$tmp"
+  mv "$tmp" "$file"
+}
+
+nanobot_available_models() {
+  local cfg="$HOME_DIR/.openclaw/openclaw.json"
+  [ -f "$cfg" ] || return 1
+  jq -r '
+    .models.providers
+    | to_entries[]
+    | .key as $p
+    | (.value.models // [])[]
+    | select(.id != null and (.id|length)>0)
+    | "\($p)/\(.id)"
+  ' "$cfg" 2>/dev/null | sort -u
+}
+
+nanobot_model_exists() {
+  local model="$1"
+  nanobot_available_models | grep -Fxq "$model"
+}
+
+resolve_model_runtime_json() {
+  local selected="$1" cfg="$HOME_DIR/.openclaw/openclaw.json"
+  python3 - "$cfg" "$selected" <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+
+cfg_path = sys.argv[1]
+selected = (sys.argv[2] or "").strip()
+if not selected or not os.path.isfile(cfg_path):
+    print("{}")
+    raise SystemExit
+
+cfg = json.load(open(cfg_path, "r", encoding="utf-8"))
+providers = ((cfg.get("models") or {}).get("providers") or {})
+
+provider = ""
+model_id = selected
+if "/" in selected:
+    maybe_provider, rest = selected.split("/", 1)
+    if maybe_provider in providers:
+        provider = maybe_provider
+        model_id = rest
+
+if not provider:
+    for p, pobj in providers.items():
+        for m in (pobj.get("models") or []):
+            if isinstance(m, dict) and str(m.get("id") or "") == selected:
+                provider = p
+                model_id = selected
+                break
+        if provider:
+            break
+
+if not provider or provider not in providers:
+    print("{}")
+    raise SystemExit
+
+pobj = providers.get(provider) or {}
+api_kind = str(pobj.get("api") or "openai-completions")
+if api_kind != "openai-completions":
+    print(json.dumps({"supported": False, "reason": f"provider-api-not-supported:{api_kind}"}, ensure_ascii=False))
+    raise SystemExit
+
+api_key = pobj.get("apiKey") or {}
+key_id = str(api_key.get("id") or "").strip()
+if not key_id:
+    print(json.dumps({"supported": False, "reason": "provider-missing-apikey-id"}, ensure_ascii=False))
+    raise SystemExit
+
+base_url = str(pobj.get("baseUrl") or "").strip()
+if not base_url:
+    print(json.dumps({"supported": False, "reason": "provider-missing-baseurl"}, ensure_ascii=False))
+    raise SystemExit
+
+print(json.dumps({
+    "supported": True,
+    "provider": provider,
+    "modelId": model_id,
+    "selected": f"{provider}/{model_id}",
+    "baseUrl": base_url.rstrip("/"),
+    "apiKeyEnvId": key_id
+}, ensure_ascii=False))
+PY
+}
+
+nanobot_model_list_message() {
+  local provider_filter="${1:-}" cfg="$HOME_DIR/.openclaw/openclaw.json"
+  [ -f "$cfg" ] || { echo "目前沒有可讀取的模型清單。"; return 0; }
+  jq -r --arg pf "$provider_filter" '
+    .models.providers
+    | to_entries
+    | map(select($pf=="" or .key==$pf))
+    | if length==0 then "找不到指定平台模型。"
+      else
+        "可選平台：" + (map(.key) | join(", ")) + "\n" +
+        (map(
+          "【" + .key + "】\n" +
+          ((.value.models // [])
+            | .[0:20]
+            | map("- " + .id)
+            | join("\n")
+          )
+        ) | join("\n"))
+      end
+  ' "$cfg" 2>/dev/null
+}
+
+set_nanobot_model() {
+  local model="$1" runtime_json supported reason selected
+  [ -n "$model" ] || return 1
+  if ! nanobot_model_exists "$model"; then
+    return 2
+  fi
+  runtime_json="$(resolve_model_runtime_json "$model")"
+  supported="$(printf '%s' "$runtime_json" | jq -r '.supported // false' 2>/dev/null || echo false)"
+  if [ "$supported" != "true" ]; then
+    reason="$(printf '%s' "$runtime_json" | jq -r '.reason // "unknown"' 2>/dev/null || echo unknown)"
+    echo "unsupported:${reason}"
+    return 3
+  fi
+  selected="$(printf '%s' "$runtime_json" | jq -r '.selected // empty' 2>/dev/null || true)"
+  [ -n "$selected" ] || return 4
+  NANOBOT_MODEL="$selected"
+  env_upsert_var "$ENV_FILE" "NANOBOT_MODEL" "$selected"
+  return 0
 }
 
 latest_openclaw_runtime_log() {
@@ -861,12 +1011,23 @@ rebuild_rescue() {
 call_model_json() {
   local prompt="$1" schema_json="$2" out_var="$3"
   local payload resp response_content
-  if [ -z "$NVIDIA_API_KEY" ]; then
+  local runtime_json supported base_url model_id key_env_id key_value
+  runtime_json="$(resolve_model_runtime_json "$NANOBOT_MODEL")"
+  supported="$(printf '%s' "$runtime_json" | jq -r '.supported // false' 2>/dev/null || echo false)"
+  if [ "$supported" != "true" ]; then
+    printf -v "$out_var" '%s' ""
+    return 1
+  fi
+  base_url="$(printf '%s' "$runtime_json" | jq -r '.baseUrl // empty' 2>/dev/null || true)"
+  model_id="$(printf '%s' "$runtime_json" | jq -r '.modelId // empty' 2>/dev/null || true)"
+  key_env_id="$(printf '%s' "$runtime_json" | jq -r '.apiKeyEnvId // empty' 2>/dev/null || true)"
+  key_value="${!key_env_id:-}"
+  if [ -z "$base_url" ] || [ -z "$model_id" ] || [ -z "$key_env_id" ] || [ -z "$key_value" ]; then
     printf -v "$out_var" '%s' ""
     return 1
   fi
   payload="$(jq -n \
-    --arg model "$NANOBOT_MODEL" \
+    --arg model "$model_id" \
     --arg prompt "$prompt" \
     --argjson schema "$schema_json" '
     {
@@ -886,8 +1047,8 @@ call_model_json() {
       }
     }')"
   resp="$(curl -fsS --max-time 30 \
-    -X POST "${NANOBOT_BASE_URL}/chat/completions" \
-    -H "Authorization: Bearer ${NVIDIA_API_KEY}" \
+    -X POST "${base_url}/chat/completions" \
+    -H "Authorization: Bearer ${key_value}" \
     -H "Content-Type: application/json" \
     -d "$payload" 2>/dev/null || true)"
   response_content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
@@ -897,12 +1058,26 @@ call_model_json() {
 
 model_chat_reply() {
   local user_text="$1" payload resp content snapshot_json
+  local runtime_json supported base_url model_id key_env_id key_value
   snapshot_json="$(collect_openclaw_snapshot_json)"
-  if [ -z "$NVIDIA_API_KEY" ]; then
+  runtime_json="$(resolve_model_runtime_json "$NANOBOT_MODEL")"
+  supported="$(printf '%s' "$runtime_json" | jq -r '.supported // false' 2>/dev/null || echo false)"
+  if [ "$supported" != "true" ]; then
+    printf '%s\n%s\n%s\n' \
+      "目前模型平台不支援潤天蟹直接對話，請先用 /model set nvidia/z-ai/glm5 或 /model set openrouter/<model>。" \
+      "$(build_brief_status_line)" \
+      "你也可以輸入 /model list 看可切換模型。"
+    return 0
+  fi
+  base_url="$(printf '%s' "$runtime_json" | jq -r '.baseUrl // empty' 2>/dev/null || true)"
+  model_id="$(printf '%s' "$runtime_json" | jq -r '.modelId // empty' 2>/dev/null || true)"
+  key_env_id="$(printf '%s' "$runtime_json" | jq -r '.apiKeyEnvId // empty' 2>/dev/null || true)"
+  key_value="${!key_env_id:-}"
+  if [ -z "$key_value" ]; then
     printf '%s\n' "$(build_brief_status_line)"
     return 0
   fi
-  payload="$(jq -n --arg model "$NANOBOT_MODEL" --arg text "$user_text" --arg snapshot "$snapshot_json" '
+  payload="$(jq -n --arg model "$model_id" --arg text "$user_text" --arg snapshot "$snapshot_json" '
     {
       model: $model,
       temperature: 0.2,
@@ -922,8 +1097,8 @@ model_chat_reply() {
       ]
     }')"
   resp="$(curl -fsS --max-time 35 \
-    -X POST "${NANOBOT_BASE_URL}/chat/completions" \
-    -H "Authorization: Bearer ${NVIDIA_API_KEY}" \
+    -X POST "${base_url}/chat/completions" \
+    -H "Authorization: Bearer ${key_value}" \
     -H "Content-Type: application/json" \
     -d "$payload" 2>/dev/null || true)"
   content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
@@ -995,6 +1170,83 @@ classify_natural_intent() {
   fi
   INTENT_CLASS="chat"
   INTENT_REASON="model-timeout"
+}
+
+is_nanobot_self_repair_request() {
+  local text_norm
+  text_norm="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  if printf '%s' "$text_norm" | grep -Eiq '修復|修正|救援|回滾|rebuild|repair|fix'; then
+    if printf '%s' "$text_norm" | grep -Eiq '潤天蟹|nanobot|你自己|自身|你的底層'; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+handoff_enqueue() {
+  local from="$1" to="$2" type="$3" reason="$4" detail="${5:-}"
+  [ -x "$HANDOFF_SCRIPT" ] || return 1
+  "$HANDOFF_SCRIPT" enqueue \
+    --from "$from" \
+    --to "$to" \
+    --type "$type" \
+    --reason "$reason" \
+    --detail "$detail"
+}
+
+delegate_nanobot_self_fix_to_openclaw() {
+  local text="$1" task_json task_id task_file msg
+  if ! is_true_flag "$HANDOFF_ENABLED"; then
+    send_telegram "⚠️ 潤天蟹：目前未啟用跨代理交辦機制，無法轉交引天渡。"
+    return 1
+  fi
+  if ! task_json="$(handoff_enqueue "nanobot" "openclaw" "nanobot-core-fix" "nanobot-self-fix-request" "$text" 2>/dev/null)"; then
+    send_telegram "⚠️ 潤天蟹：建立交辦任務失敗，無法轉交引天渡。"
+    return 1
+  fi
+  task_id="$(printf '%s' "$task_json" | jq -r '.id // empty' 2>/dev/null || true)"
+  task_file="$(printf '%s' "$task_json" | jq -r '.file // empty' 2>/dev/null || true)"
+  msg="【跨代理委派任務】請協助修復潤天蟹底層（禁止潤天蟹自修）。
+任務ID：${task_id}
+任務檔：${task_file}
+需求：${text}
+請完成後把任務標記 done/failed。"
+  "$OPENCLAW_BIN" agent --message "$msg" --timeout 240 >/dev/null 2>&1 || true
+  send_telegram "🧭 潤天蟹：你要求的是潤天蟹自我底層修正，已轉交引天渡處理（任務ID：${task_id}）。"
+  return 0
+}
+
+maybe_process_openclaw_handoff() {
+  local task id type reason detail result note
+  if ! is_true_flag "$HANDOFF_ENABLED"; then
+    return 0
+  fi
+  [ -x "$HANDOFF_SCRIPT" ] || return 0
+  task="$("$HANDOFF_SCRIPT" claim --to nanobot --actor nanobot 2>/dev/null || true)"
+  [ -n "$task" ] || return 0
+  id="$(printf '%s' "$task" | jq -r '.id // empty' 2>/dev/null || true)"
+  type="$(printf '%s' "$task" | jq -r '.type // empty' 2>/dev/null || true)"
+  reason="$(printf '%s' "$task" | jq -r '.reason // empty' 2>/dev/null || true)"
+  detail="$(printf '%s' "$task" | jq -r '.detail // empty' 2>/dev/null || true)"
+  [ -n "$id" ] || return 0
+
+  case "$type" in
+    openclaw-core-fix|openclaw-core-repair|openclaw-rescue)
+      send_telegram "🤝 潤天蟹收到引天渡交辦：修復 OpenClaw（任務ID：${id}）。"
+      if run_repair_playbook "handoff:${reason:-openclaw-handoff}"; then
+        note="handled-by-nanobot:openclaw-repaired"
+        "$HANDOFF_SCRIPT" complete --id "$id" --status done --note "$note" --actor nanobot >/dev/null 2>&1 || true
+      else
+        note="handled-by-nanobot:repair-failed"
+        "$HANDOFF_SCRIPT" complete --id "$id" --status failed --note "$note" --actor nanobot >/dev/null 2>&1 || true
+      fi
+      ;;
+    *)
+      note="unsupported-task-type:${type}"
+      "$HANDOFF_SCRIPT" complete --id "$id" --status skipped --note "$note" --actor nanobot >/dev/null 2>&1 || true
+      send_telegram "⚠️ 潤天蟹：收到不支援的交辦類型（${type}），已標記跳過。"
+      ;;
+  esac
 }
 
 run_repair_playbook() {
@@ -1096,8 +1348,42 @@ $(repair_status_summary)"
       "/repair"|"/rescue"|"/fix"|"/repair@"*|"/rescue@"*|"/fix@"*)
         run_repair_playbook "telegram-command"
         ;;
-      "/model"|"/model@"*)
-        send_telegram_to_chat "$chat_id" "🦀 潤天蟹目前模型：${NANOBOT_MODEL}"
+      "/model"*|"/model@"*)
+        # /model
+        # /model list [provider]
+        # /model set <provider/model>
+        # /model <provider/model>
+        local cmd_arg
+        cmd_arg="$(printf '%s' "$text" | sed -E 's#^/model(@[^ ]+)?[ ]*##')"
+        if [ -z "$cmd_arg" ]; then
+          send_telegram_to_chat "$chat_id" "🦀 潤天蟹目前模型：${NANOBOT_MODEL}
+可用指令：
+- /model list
+- /model list nvidia
+- /model set nvidia/z-ai/glm5
+- /model openrouter/openai/gpt-oss-120b"
+        elif printf '%s' "$cmd_arg" | grep -Eiq '^list( |$)'; then
+          local provider
+          provider="$(printf '%s' "$cmd_arg" | awk '{print $2}')"
+          send_telegram_to_chat "$chat_id" "$(nanobot_model_list_message "$provider")"
+        else
+          local target_model set_ret set_msg
+          target_model="$(printf '%s' "$cmd_arg" | sed -E 's#^set[ ]+##')"
+          set_msg="$(set_nanobot_model "$target_model" 2>&1 || true)"
+          set_ret=$?
+          if [ "$set_ret" -eq 0 ]; then
+            send_telegram_to_chat "$chat_id" "✅ 潤天蟹模型已切換：${NANOBOT_MODEL}"
+          elif [ "$set_ret" -eq 2 ]; then
+            send_telegram_to_chat "$chat_id" "❌ 找不到模型：${target_model}
+請先用 /model list 查看可選清單。"
+          elif [ "$set_ret" -eq 3 ]; then
+            send_telegram_to_chat "$chat_id" "⚠️ 目前不支援該平台直連：${target_model}
+原因：${set_msg}
+請改用 openai-completions 平台模型（如 nvidia/openrouter/groq/opencode）。"
+          else
+            send_telegram_to_chat "$chat_id" "❌ 模型切換失敗：${target_model}"
+          fi
+        fi
         ;;
       "/help"|"/help@"*)
         send_telegram_to_chat "$chat_id" "🦀 我會先自動診斷，再直接處理。你用自然語言描述需求即可。"
@@ -1106,26 +1392,30 @@ $(repair_status_summary)"
         send_telegram_to_chat "$chat_id" "$(rescue_manual_brief)"
         ;;
       *)
-        classify_natural_intent "$text"
-        intent="$INTENT_CLASS"
-        reason="$INTENT_REASON"
-        case "$intent" in
-          repair)
-            run_repair_playbook "natural:${reason}"
-            ;;
-          diagnose)
-            send_telegram_to_chat "$chat_id" "$(build_status_report)
+        if is_nanobot_self_repair_request "$text"; then
+          delegate_nanobot_self_fix_to_openclaw "$text"
+        else
+          classify_natural_intent "$text"
+          intent="$INTENT_CLASS"
+          reason="$INTENT_REASON"
+          case "$intent" in
+            repair)
+              run_repair_playbook "natural:${reason}"
+              ;;
+            diagnose)
+              send_telegram_to_chat "$chat_id" "$(build_status_report)
 $(repair_status_summary)"
-            ;;
-          status)
-            send_telegram_to_chat "$chat_id" "$(build_status_report)
+              ;;
+            status)
+              send_telegram_to_chat "$chat_id" "$(build_status_report)
 $(repair_status_summary)"
-            ;;
-          chat|*)
-            reply="$(model_chat_reply "$text")"
-            send_telegram_to_chat "$chat_id" "$reply"
-            ;;
-        esac
+              ;;
+            chat|*)
+              reply="$(model_chat_reply "$text")"
+              send_telegram_to_chat "$chat_id" "$reply"
+              ;;
+          esac
+        fi
         ;;
     esac
   } || rc=$?
@@ -1499,6 +1789,7 @@ run_daemon() {
 
   while true; do
     poll_telegram_updates
+    maybe_process_openclaw_handoff
     maybe_notify_subagent_failure
     maybe_notify_google_keypool_issues
     check_health_cycle
