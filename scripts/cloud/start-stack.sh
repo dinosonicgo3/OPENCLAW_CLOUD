@@ -5,17 +5,11 @@ export PATH="$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export TZ="${TZ:-Asia/Taipei}"
 export LANG="${LANG:-C.UTF-8}"
 export LC_ALL="${LC_ALL:-C.UTF-8}"
-mkdir -p "$HOME/openclaw-logs" "$HOME/tmp" "$HOME/.openclaw-nanobot"
+mkdir -p "$HOME/openclaw-logs" "$HOME/tmp"
 
 start_openclaw() {
   if ! tmux has-session -t =openclaw 2>/dev/null; then
     tmux new -d -s openclaw "$HOME/cloud/openclaw-launch.sh"
-  fi
-}
-
-start_nanobot() {
-  if ! tmux has-session -t =openclaw-nanobot 2>/dev/null; then
-    tmux new -d -s openclaw-nanobot "bash $HOME/DINO_OPENCLAW/scripts/termux-rescue-nanobot.sh --daemon >>$HOME/openclaw-logs/nanobot.log 2>&1"
   fi
 }
 
@@ -36,7 +30,6 @@ start_webhook() {
 
 while true; do
   start_openclaw
-  start_nanobot
   start_subagent_sentinel
   start_webhook
   sleep 10

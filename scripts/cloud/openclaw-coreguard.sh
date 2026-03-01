@@ -59,7 +59,7 @@ set_value(rate, 'windowMs', 60000)
 set_value(rate, 'lockoutMs', 300000)
 
 control = ensure_dict(gateway, 'controlUi')
-set_value(control, 'dangerouslyAllowHostHeaderOriginFallback', False)
+set_value(control, 'dangerouslyAllowHostHeaderOriginFallback', True)
 allowed = control.get('allowedOrigins') if isinstance(control.get('allowedOrigins'), list) else []
 port = gateway['port']
 need = {f'http://localhost:{port}', f'http://127.0.0.1:{port}'}
@@ -109,6 +109,20 @@ search_provider_map = {
 }
 search_provider = search_provider_map.get(main_provider, 'gemini')
 tools = ensure_dict(obj, 'tools')
+elevated = ensure_dict(tools, 'elevated')
+set_value(elevated, 'enabled', True)
+allow_from = ensure_dict(elevated, 'allowFrom')
+if not isinstance(allow_from.get('telegram'), list):
+    allow_from['telegram'] = []
+    changed = True
+owner = os.environ.get('TELEGRAM_OWNER_ID', '').strip()
+if not owner:
+    allow_from_tele = tele.get('allowFrom') if isinstance(tele.get('allowFrom'), list) else []
+    if allow_from_tele:
+        owner = str(allow_from_tele[0]).strip()
+if owner and owner not in allow_from['telegram']:
+    allow_from['telegram'].append(owner)
+    changed = True
 web = ensure_dict(tools, 'web')
 search = ensure_dict(web, 'search')
 set_value(search, 'provider', search_provider)
@@ -119,6 +133,11 @@ if model.get('fallbacks') != []:
 if not isinstance(defs.get('models'), dict):
     defs['models'] = {}
     changed = True
+set_value(defs, 'timeoutSeconds', 1200)
+set_value(defs, 'elevatedDefault', 'on')
+set_value(defs, 'contextTokens', 120000)
+sandbox = ensure_dict(defs, 'sandbox')
+set_value(sandbox, 'mode', 'off')
 
 set_value(defs, 'workspace', '/home/ubuntu/OpenClawVault')
 
@@ -128,9 +147,12 @@ if follow_primary:
     set_value(subagents, 'model', primary_model)
 elif not str(subagents.get('model') or '').strip():
     set_value(subagents, 'model', primary_model)
-set_value(subagents, 'runTimeoutSeconds', 300)
-set_value(subagents, 'announceTimeoutMs', 120000)
+set_value(subagents, 'runTimeoutSeconds', 1800)
+set_value(subagents, 'announceTimeoutMs', 300000)
 set_value(subagents, 'maxConcurrent', 3)
+set_value(subagents, 'maxSpawnDepth', 2)
+set_value(subagents, 'maxChildrenPerAgent', 6)
+set_value(subagents, 'archiveAfterMinutes', 120)
 
 memory_search = ensure_dict(defs, 'memorySearch')
 set_value(memory_search, 'provider', 'local')
@@ -161,7 +183,7 @@ set_value(
 commands = ensure_dict(obj, 'commands')
 set_value(commands, 'native', 'auto')
 set_value(commands, 'nativeSkills', 'auto')
-set_value(commands, 'restart', False)
+set_value(commands, 'restart', True)
 set_value(commands, 'ownerDisplay', 'raw')
 
 models = ensure_dict(obj, 'models')

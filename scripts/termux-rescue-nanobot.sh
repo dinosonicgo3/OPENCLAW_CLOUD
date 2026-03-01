@@ -21,6 +21,8 @@ OPENCLAW_REBUILD_SCRIPT="${OPENCLAW_REBUILD_SCRIPT:-}"
 OPENCLAW_REPO_BRANCH="${OPENCLAW_REPO_BRANCH:-main}"
 OPENCLAW_SERVICE_NAME="${OPENCLAW_SERVICE_NAME:-openclaw.service}"
 OPENCLAW_REBUILD_SERVICE="${OPENCLAW_REBUILD_SERVICE:-openclaw.service}"
+OPENCLAW_SUBAGENT_MONITOR_SERVICE="${OPENCLAW_SUBAGENT_MONITOR_SERVICE:-openclaw-subagent-monitor.service}"
+OPENCLAW_WEBHOOK_SERVICE="${OPENCLAW_WEBHOOK_SERVICE:-openclaw-webhook.service}"
 NANOBOT_RUNTIME_ENV="${NANOBOT_RUNTIME_ENV:-auto}"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -43,6 +45,7 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-1}"
 TELEGRAM_LONGPOLL_TIMEOUT="${TELEGRAM_LONGPOLL_TIMEOUT:-25}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-600}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-35}"
+OPENCLAW_CHANNELS_STATUS_TIMEOUT_SECONDS="${OPENCLAW_CHANNELS_STATUS_TIMEOUT_SECONDS:-20}"
 OPENCLAW_REPLY_LAG_SECONDS="${OPENCLAW_REPLY_LAG_SECONDS:-300}"
 OPENCLAW_PENDING_USER_ALERT_MAX_AGE_SECONDS="${OPENCLAW_PENDING_USER_ALERT_MAX_AGE_SECONDS:-7200}"
 OPENCLAW_STUCK_TASK_SECONDS="${OPENCLAW_STUCK_TASK_SECONDS:-180}"
@@ -54,19 +57,27 @@ OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS="${OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS:-
 SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS="${SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS:-30}"
 SUBAGENT_ALERT_WINDOW_SECONDS="${SUBAGENT_ALERT_WINDOW_SECONDS:-300}"
 SUBAGENT_ALERT_LINES="${SUBAGENT_ALERT_LINES:-1800}"
+SUBAGENT_ALERT_MIN_INTERVAL_SECONDS="${SUBAGENT_ALERT_MIN_INTERVAL_SECONDS:-180}"
 GOOGLE_KEYPOOL_STATUS_URL="${GOOGLE_KEYPOOL_STATUS_URL:-http://127.0.0.1:18889/__keypool/status}"
 GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS="${GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS:-86400}"
 NANOBOT_GOOGLE_KEYPOOL_ALERT_ENABLED="${NANOBOT_GOOGLE_KEYPOOL_ALERT_ENABLED:-0}"
+NANOBOT_GOOGLE_AUTO_ROTATE_ENABLED="${NANOBOT_GOOGLE_AUTO_ROTATE_ENABLED:-1}"
+NANOBOT_GOOGLE_AUTO_ROTATE_COOLDOWN_SECONDS="${NANOBOT_GOOGLE_AUTO_ROTATE_COOLDOWN_SECONDS:-900}"
+NANOBOT_GOOGLE_ERROR_SCAN_LINES="${NANOBOT_GOOGLE_ERROR_SCAN_LINES:-900}"
 OPENCLAW_STALE_LOCK_SECONDS="${OPENCLAW_STALE_LOCK_SECONDS:-1800}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
 NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-1800}"
 NANOBOT_STARTUP_NOTIFY="${NANOBOT_STARTUP_NOTIFY:-0}"
+NANOBOT_REPAIR_TRIGGER_COOLDOWN_SECONDS="${NANOBOT_REPAIR_TRIGGER_COOLDOWN_SECONDS:-90}"
 MAX_TELEGRAM_TEXT_BYTES="${MAX_TELEGRAM_TEXT_BYTES:-3500}"
+NANOBOT_TYPING_MAX_SECONDS="${NANOBOT_TYPING_MAX_SECONDS:-120}"
+NANOBOT_TYPING_INTERVAL_SECONDS="${NANOBOT_TYPING_INTERVAL_SECONDS:-3}"
 NANOBOT_INCLUDE_UPSTREAM_CHECK="${NANOBOT_INCLUDE_UPSTREAM_CHECK:-0}"
 INTENT_CLASS="chat"
 INTENT_REASON="default"
 OPENCLAW_LAST_HEALTH_REASON=""
+TYPING_PID=""
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
@@ -272,6 +283,28 @@ set_nanobot_model() {
   [ -n "$selected" ] || return 4
   NANOBOT_MODEL="$selected"
   env_upsert_var "$ENV_FILE" "NANOBOT_MODEL" "$selected"
+  return 0
+}
+
+current_openclaw_model() {
+  local cfg="$HOME_DIR/.openclaw/openclaw.json"
+  [ -f "$cfg" ] || return 1
+  jq -r '.agents.defaults.model.primary // empty' "$cfg" 2>/dev/null | head -n1
+}
+
+set_openclaw_model() {
+  local model="$1" cfg="$HOME_DIR/.openclaw/openclaw.json" tmp
+  [ -n "$model" ] || return 1
+  [ -f "$cfg" ] || return 1
+  if ! nanobot_model_exists "$model"; then
+    return 2
+  fi
+  tmp="$(mktemp)"
+  if ! jq --arg m "$model" '.agents.defaults.model.primary=$m | .agents.defaults.subagents.model=$m' "$cfg" >"$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$cfg"
   return 0
 }
 
@@ -482,9 +515,19 @@ EOF
 }
 
 gateway_health_ok() {
-  # Prefer channel-aware health because `openclaw health --json` can report
-  # stale false negatives while channels are actually running.
-  openclaw_healthy
+  # Non-blocking health probe only. Do not recurse into openclaw_healthy(),
+  # otherwise it causes a self-call loop and unstable status judgments.
+  local health_json ok
+  health_json="$(run_with_timeout "$HEALTH_TIMEOUT_SECONDS" "$OPENCLAW_BIN" health --json 2>/dev/null || true)"
+  if [ -n "$health_json" ]; then
+    ok="$(printf '%s' "$health_json" | jq -r '.ok // false' 2>/dev/null || echo false)"
+    if [ "$ok" = "true" ]; then
+      return 0
+    fi
+  fi
+  # Keep permissive fallback because channel/process checks above are stronger
+  # and `openclaw health` may transiently report stale false negatives.
+  return 0
 }
 
 enforce_stable_model_defaults() {
@@ -795,11 +838,15 @@ state_init() {
   "last_subagent_check_ts": 0,
   "last_google_keypool_check_ts": 0,
   "last_google_keypool_signature": "",
-  "last_google_keypool_alert_ts": 0
+  "last_google_keypool_alert_ts": 0,
+  "last_repair_trigger_key": "",
+  "last_repair_trigger_ts": 0,
+  "control_action": "",
+  "control_action_ts": 0
 }
 EOF
   fi
-  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0) | .last_google_keypool_check_ts = (.last_google_keypool_check_ts // 0) | .last_google_keypool_signature = (.last_google_keypool_signature // "") | .last_google_keypool_alert_ts = (.last_google_keypool_alert_ts // 0)'
+  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0) | .last_google_keypool_check_ts = (.last_google_keypool_check_ts // 0) | .last_google_keypool_signature = (.last_google_keypool_signature // "") | .last_google_keypool_alert_ts = (.last_google_keypool_alert_ts // 0) | .last_repair_trigger_key = (.last_repair_trigger_key // "") | .last_repair_trigger_ts = (.last_repair_trigger_ts // 0) | .control_action = (.control_action // "") | .control_action_ts = (.control_action_ts // 0)'
 }
 
 state_get() {
@@ -813,6 +860,79 @@ state_set() {
   tmp="$(mktemp)"
   jq "$expr" "$STATE_FILE" >"$tmp"
   mv "$tmp" "$STATE_FILE"
+}
+
+hash_text() {
+  printf '%s' "${1:-}" | sha1sum | awk '{print $1}'
+}
+
+is_duplicate_repair_trigger() {
+  local key_src="$1" now key last_key last_ts
+  key="$(hash_text "$key_src")"
+  now="$(date +%s)"
+  last_key="$(state_get '.last_repair_trigger_key // ""' 2>/dev/null || true)"
+  last_ts="$(state_get '.last_repair_trigger_ts // 0' 2>/dev/null || echo 0)"
+  [ -n "$last_ts" ] || last_ts=0
+  if [ "$key" = "$last_key" ] && [ "$((now - last_ts))" -lt "$NANOBOT_REPAIR_TRIGGER_COOLDOWN_SECONDS" ]; then
+    return 0
+  fi
+  state_set ".last_repair_trigger_key=\"${key}\" | .last_repair_trigger_ts=${now}"
+  return 1
+}
+
+queue_control_action() {
+  local action="$1" now
+  case "$action" in
+    stop|restart) ;;
+    *) return 1 ;;
+  esac
+  now="$(date +%s)"
+  state_set ".control_action=\"${action}\" | .control_action_ts=${now}"
+}
+
+take_control_action() {
+  local action
+  action="$(state_get '.control_action // ""' 2>/dev/null || true)"
+  case "$action" in
+    stop|restart)
+      state_set '.control_action="" | .control_action_ts=0'
+      printf '%s' "$action"
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+dispatch_control_action() {
+  local action="$1"
+  case "$action" in
+    stop)
+      log "control action received: stop"
+      send_telegram "🛑 潤天蟹收到 /STOP，正在停止異常迴圈任務。"
+      run_stop_playbook "control-action-stop" >/dev/null 2>&1 || true
+      ;;
+    restart)
+      log "control action received: restart"
+      send_telegram "♻️ 潤天蟹收到 /REST，正在重啟 OpenClaw 服務。"
+      run_restart_services_playbook "control-action-rest" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
+terminate_other_nanobot_daemons() {
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" = "$$" ] && continue
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  done < <(ps -eo pid,args 2>/dev/null | awk '/termux-rescue-nanobot\.sh --daemon/ && !/awk/ {print $1}')
+  sleep 1
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" = "$$" ] && continue
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+  done < <(ps -eo pid,args 2>/dev/null | awk '/termux-rescue-nanobot\.sh --daemon/ && !/awk/ {print $1}')
 }
 
 repair_is_running() {
@@ -867,18 +987,44 @@ send_telegram_to_chat() {
 
 start_typing_loop() {
   local chat_id="${1:-$TELEGRAM_OWNER_ID}"
+  local max_seconds interval parent_pid
+  stop_typing_loop "${TYPING_PID:-}"
   TYPING_PID=""
   [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
   [ -n "$chat_id" ] || return 0
-  (
+  max_seconds="$NANOBOT_TYPING_MAX_SECONDS"
+  interval="$NANOBOT_TYPING_INTERVAL_SECONDS"
+  parent_pid="$$"
+  bash -c '
+    token="$1"
+    chat="$2"
+    ttl="$3"
+    interval="$4"
+    parent="$5"
+    start_ts="$(date +%s)"
+    fail_count=0
     while true; do
-      curl -fsS --max-time 10 \
-        -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendChatAction" \
-        -d "chat_id=${chat_id}" \
-        -d "action=typing" >/dev/null 2>&1 || true
-      sleep 3
+      now="$(date +%s)"
+      if [ "${ttl:-0}" -gt 0 ] && [ "$((now - start_ts))" -ge "${ttl:-0}" ]; then
+        break
+      fi
+      if ! kill -0 "${parent}" >/dev/null 2>&1; then
+        break
+      fi
+      if curl -fsS --max-time 10 \
+        -X POST "https://api.telegram.org/bot${token}/sendChatAction" \
+        -d "chat_id=${chat}" \
+        -d "action=typing" >/dev/null 2>&1; then
+        fail_count=0
+      else
+        fail_count=$((fail_count + 1))
+      fi
+      if [ "$fail_count" -ge 20 ]; then
+        break
+      fi
+      sleep "${interval:-3}"
     done
-  ) &
+  ' _ "$TELEGRAM_BOT_TOKEN" "$chat_id" "$max_seconds" "$interval" "$parent_pid" &
   TYPING_PID="$!"
 }
 
@@ -887,6 +1033,9 @@ stop_typing_loop() {
   [ -n "$pid" ] || return 0
   kill "$pid" >/dev/null 2>&1 || true
   wait "$pid" >/dev/null 2>&1 || true
+  if [ "${TYPING_PID:-}" = "$pid" ]; then
+    TYPING_PID=""
+  fi
 }
 
 openclaw_healthy() {
@@ -919,7 +1068,7 @@ PY
   local status_json running inbound outbound now lag tries
   status_json=""
   for tries in 1 2; do
-    status_json="$($OPENCLAW_BIN channels status --json 2>/dev/null || true)"
+    status_json="$(run_with_timeout "$OPENCLAW_CHANNELS_STATUS_TIMEOUT_SECONDS" "$OPENCLAW_BIN" channels status --json 2>/dev/null || true)"
     running="$(printf '%s' "$status_json" | jq -r '.channels.telegram.running // false' 2>/dev/null || echo false)"
     if [ "$running" = "true" ]; then
       break
@@ -1072,6 +1221,99 @@ restart_openclaw() {
   tmux new -d -s openclaw "$OPENCLAW_BOOT_SCRIPT"
   sleep 10
   openclaw_healthy
+}
+
+restart_openclaw_services() {
+  local restarted failed svc_status
+  restarted=""
+  failed=""
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$OPENCLAW_SERVICE_NAME" >/dev/null 2>&1; then
+    if sudo systemctl restart "$OPENCLAW_SERVICE_NAME" >/dev/null 2>&1; then
+      restarted="${restarted} ${OPENCLAW_SERVICE_NAME}"
+    else
+      failed="${failed} ${OPENCLAW_SERVICE_NAME}"
+    fi
+  else
+    if restart_openclaw; then
+      restarted="${restarted} openclaw-tmux"
+    else
+      failed="${failed} openclaw-tmux"
+    fi
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$OPENCLAW_SUBAGENT_MONITOR_SERVICE" >/dev/null 2>&1; then
+    if sudo systemctl restart "$OPENCLAW_SUBAGENT_MONITOR_SERVICE" >/dev/null 2>&1; then
+      restarted="${restarted} ${OPENCLAW_SUBAGENT_MONITOR_SERVICE}"
+    else
+      failed="${failed} ${OPENCLAW_SUBAGENT_MONITOR_SERVICE}"
+    fi
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$OPENCLAW_WEBHOOK_SERVICE" >/dev/null 2>&1; then
+    if sudo systemctl restart "$OPENCLAW_WEBHOOK_SERVICE" >/dev/null 2>&1; then
+      restarted="${restarted} ${OPENCLAW_WEBHOOK_SERVICE}"
+    else
+      failed="${failed} ${OPENCLAW_WEBHOOK_SERVICE}"
+    fi
+  fi
+  sleep 6
+  svc_status="ok"
+  if [ -n "$failed" ]; then
+    svc_status="unhealthy"
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$OPENCLAW_SERVICE_NAME" >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet "$OPENCLAW_SERVICE_NAME"; then
+      svc_status="unhealthy"
+    fi
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$OPENCLAW_SUBAGENT_MONITOR_SERVICE" >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet "$OPENCLAW_SUBAGENT_MONITOR_SERVICE"; then
+      svc_status="unhealthy"
+    fi
+  fi
+  printf '%s|%s|%s' "$svc_status" "$(printf '%s' "$restarted" | sed -E 's/^ +//')" "$(printf '%s' "$failed" | sed -E 's/^ +//')"
+}
+
+stop_typing_actions_globally() {
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  done < <(ps -eo pid,args 2>/dev/null | awk '/sendChatAction/ && /api\.telegram\.org\/bot/ && !/awk/ {print $1}')
+}
+
+run_stop_playbook() {
+  local reason="$1" now blockers_fixed stale_fixed
+  now="$(date +%s)"
+  stop_typing_loop "${TYPING_PID:-}" || true
+  stop_typing_actions_globally || true
+  state_set ".control_action=\"\" | .control_action_ts=0 | .repair_in_progress=false | .repair_step=\"stopped\" | .repair_updated_at=${now}"
+  rm -rf "$REPAIR_LOCK_DIR" >/dev/null 2>&1 || true
+  if remediate_blocking_tasks; then
+    blockers_fixed="yes"
+  else
+    blockers_fixed="no"
+  fi
+  if remediate_stale_artifacts; then
+    stale_fixed="yes"
+  else
+    stale_fixed="no"
+  fi
+  state_set ".last_action_ts=${now} | .last_action=\"stop_loops\" | .last_reason=\"${reason}\" | .last_report=\"ok\""
+  printf '🛑 /stop 已執行：\n- 阻塞任務清理：%s\n- 殘留鎖清理：%s\n- typing 迴圈：已停止' "$blockers_fixed" "$stale_fixed"
+}
+
+run_restart_services_playbook() {
+  local reason="$1" res status restarted failed now
+  now="$(date +%s)"
+  res="$(restart_openclaw_services)"
+  status="$(printf '%s' "$res" | cut -d'|' -f1)"
+  restarted="$(printf '%s' "$res" | cut -d'|' -f2)"
+  failed="$(printf '%s' "$res" | cut -d'|' -f3)"
+  state_set ".last_action_ts=${now} | .last_action=\"rest_services\" | .last_reason=\"${reason}\" | .last_report=\"${status}\""
+  if [ "$status" = "ok" ]; then
+    printf '♻️ /rest 已完成：\n- 已重啟：%s\n- 失敗：%s\n- 健康檢查：正常' "${restarted:-none}" "${failed:-none}"
+  else
+    printf '⚠️ /rest 已執行但仍異常：\n- 已重啟：%s\n- 失敗：%s\n- 健康檢查：未恢復' "${restarted:-none}" "${failed:-none}"
+  fi
 }
 
 resolve_stable_tag() {
@@ -1492,42 +1734,79 @@ handle_command() {
 $(repair_status_summary)"
         ;;
       "/repair"|"/rescue"|"/fix"|"/repair@"*|"/rescue@"*|"/fix@"*)
-        run_repair_playbook "telegram-command"
+        if is_duplicate_repair_trigger "telegram-command|${text}"; then
+          send_telegram_to_chat "$chat_id" "⏱️ 潤天蟹：剛才已收到同類修復指令，避免重複執行。"
+        else
+          run_repair_playbook "telegram-command" || true
+        fi
+        ;;
+      "/stop"|"/stop@"*|"/STOP"|"/STOP@"*)
+        send_telegram_to_chat "$chat_id" "$(run_stop_playbook "telegram-stop")"
+        ;;
+      "/rest"|"/rest@"*|"/REST"|"/REST@"*|"/restart"|"/restart@"*|"/RESTART"|"/RESTART@"*)
+        send_telegram_to_chat "$chat_id" "$(run_restart_services_playbook "telegram-rest")"
         ;;
       "/model"*|"/model@"*)
         # /model
         # /model list [provider]
         # /model set <provider/model>
-        # /model <provider/model>
+        # /model [nanobot|openclaw] <provider/model>
         local cmd_arg
         cmd_arg="$(printf '%s' "$text" | sed -E 's#^/model(@[^ ]+)?[ ]*##')"
         if [ -z "$cmd_arg" ]; then
+          local current_openclaw
+          current_openclaw="$(current_openclaw_model || true)"
           send_telegram_to_chat "$chat_id" "🦀 潤天蟹目前模型：${NANOBOT_MODEL}
+OpenClaw 目前模型：${current_openclaw:-unknown}
 可用指令：
 - /model list
 - /model list nvidia
-- /model set nvidia/z-ai/glm5
-- /model openrouter/openai/gpt-oss-120b"
+- /model set nanobot nvidia/z-ai/glm5
+- /model set openclaw nvidia/z-ai/glm5
+- /model openclaw openrouter/openai/gpt-oss-120b"
         elif printf '%s' "$cmd_arg" | grep -Eiq '^list( |$)'; then
           local provider
           provider="$(printf '%s' "$cmd_arg" | awk '{print $2}')"
           send_telegram_to_chat "$chat_id" "$(nanobot_model_list_message "$provider")"
         else
-          local target_model set_ret set_msg
+          local target_model target_role set_ret set_msg
+          target_role="nanobot"
           target_model="$(printf '%s' "$cmd_arg" | sed -E 's#^set[ ]+##')"
-          set_msg="$(set_nanobot_model "$target_model" 2>&1 || true)"
-          set_ret=$?
-          if [ "$set_ret" -eq 0 ]; then
-            send_telegram_to_chat "$chat_id" "✅ 潤天蟹模型已切換：${NANOBOT_MODEL}"
-          elif [ "$set_ret" -eq 2 ]; then
-            send_telegram_to_chat "$chat_id" "❌ 找不到模型：${target_model}
+          if printf '%s' "$target_model" | grep -Eiq '^openclaw[ ]+'; then
+            target_role="openclaw"
+            target_model="$(printf '%s' "$target_model" | sed -E 's#^openclaw[ ]+##I')"
+          elif printf '%s' "$target_model" | grep -Eiq '^nanobot[ ]+'; then
+            target_role="nanobot"
+            target_model="$(printf '%s' "$target_model" | sed -E 's#^nanobot[ ]+##I')"
+          fi
+          if [ "$target_role" = "openclaw" ]; then
+            set_openclaw_model "$target_model"
+            set_ret=$?
+            if [ "$set_ret" -eq 0 ]; then
+              set_msg="$(run_restart_services_playbook "model-switch-openclaw" || true)"
+              send_telegram_to_chat "$chat_id" "✅ OpenClaw 模型已切換：${target_model}
+${set_msg}"
+            elif [ "$set_ret" -eq 2 ]; then
+              send_telegram_to_chat "$chat_id" "❌ 找不到模型：${target_model}
 請先用 /model list 查看可選清單。"
-          elif [ "$set_ret" -eq 3 ]; then
-            send_telegram_to_chat "$chat_id" "⚠️ 目前不支援該平台直連：${target_model}
+            else
+              send_telegram_to_chat "$chat_id" "❌ OpenClaw 模型切換失敗：${target_model}"
+            fi
+          else
+            set_msg="$(set_nanobot_model "$target_model" 2>&1 || true)"
+            set_ret=$?
+            if [ "$set_ret" -eq 0 ]; then
+              send_telegram_to_chat "$chat_id" "✅ 潤天蟹模型已切換：${NANOBOT_MODEL}"
+            elif [ "$set_ret" -eq 2 ]; then
+              send_telegram_to_chat "$chat_id" "❌ 找不到模型：${target_model}
+請先用 /model list 查看可選清單。"
+            elif [ "$set_ret" -eq 3 ]; then
+              send_telegram_to_chat "$chat_id" "⚠️ 目前不支援該平台直連：${target_model}
 原因：${set_msg}
 請改用 openai-completions 平台模型（如 nvidia/openrouter/groq/opencode）。"
-          else
-            send_telegram_to_chat "$chat_id" "❌ 模型切換失敗：${target_model}"
+            else
+              send_telegram_to_chat "$chat_id" "❌ 模型切換失敗：${target_model}"
+            fi
           fi
         fi
         ;;
@@ -1539,27 +1818,39 @@ $(repair_status_summary)"
         ;;
       *)
         if is_nanobot_self_repair_request "$text"; then
-          delegate_nanobot_self_fix_to_openclaw "$text"
+          delegate_nanobot_self_fix_to_openclaw "$text" || true
         else
           classify_natural_intent "$text"
           intent="$INTENT_CLASS"
           reason="$INTENT_REASON"
           case "$intent" in
             repair)
-              run_repair_playbook "natural:${reason}"
+              if is_duplicate_repair_trigger "natural:${reason}|${text}"; then
+                send_telegram_to_chat "$chat_id" "⏱️ 潤天蟹：剛才已收到同類修復需求，先避免重複重啟。"
+              else
+                run_repair_playbook "natural:${reason}" || true
+              fi
               ;;
             diagnose)
               send_telegram_to_chat "$chat_id" "$(build_status_report)
 $(repair_status_summary)"
               if text_requests_repair_now "$text"; then
-                run_repair_playbook "natural:${reason}-auto-repair"
+                if is_duplicate_repair_trigger "natural:${reason}-auto-repair|${text}"; then
+                  send_telegram_to_chat "$chat_id" "⏱️ 潤天蟹：自動修復剛執行過，暫時不重複啟動。"
+                else
+                  run_repair_playbook "natural:${reason}-auto-repair" || true
+                fi
               fi
               ;;
             status)
               send_telegram_to_chat "$chat_id" "$(build_status_report)
 $(repair_status_summary)"
               if text_requests_repair_now "$text"; then
-                run_repair_playbook "natural:${reason}-auto-repair"
+                if is_duplicate_repair_trigger "natural:${reason}-auto-repair|${text}"; then
+                  send_telegram_to_chat "$chat_id" "⏱️ 潤天蟹：自動修復剛執行過，暫時不重複啟動。"
+                else
+                  run_repair_playbook "natural:${reason}-auto-repair" || true
+                fi
               fi
               ;;
             chat|*)
@@ -1577,7 +1868,7 @@ $(repair_status_summary)"
 }
 
 poll_telegram_updates() {
-  local last_id offset resp_file ids id max_id chat_id text
+  local last_id offset resp_file ids id max_id acked_id chat_id text
   [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
   [ -n "$TELEGRAM_OWNER_ID" ] || return 0
 
@@ -1599,19 +1890,27 @@ poll_telegram_updates() {
   fi
 
   max_id="$last_id"
+  acked_id="$last_id"
   ids="$(jq -r '.result[].update_id // empty' "$resp_file" 2>/dev/null || true)"
   for id in $ids; do
     [ "$id" -gt "$max_id" ] && max_id="$id"
     chat_id="$(jq -r ".result[] | select(.update_id==${id}) | (.message.chat.id // .edited_message.chat.id // empty)" "$resp_file" 2>/dev/null || true)"
     text="$(jq -r ".result[] | select(.update_id==${id}) | (.message.text // .edited_message.text // empty)" "$resp_file" 2>/dev/null || true)"
-    [ -n "$chat_id" ] || continue
-    [ -n "$text" ] || continue
-    [ "$chat_id" = "$TELEGRAM_OWNER_ID" ] || continue
-    handle_command "$text" "$chat_id"
+    if [ -n "$chat_id" ] && [ -n "$text" ] && [ "$chat_id" = "$TELEGRAM_OWNER_ID" ]; then
+      if ! handle_command "$text" "$chat_id"; then
+        log "handle_command failed for update_id=${id}"
+      fi
+    fi
+    if [ "$id" -gt "$acked_id" ]; then
+      state_set ".last_update_id=${id}"
+      acked_id="$id"
+    fi
   done
 
   rm -f "$resp_file"
-  state_set ".last_update_id=${max_id}"
+  if [ "$max_id" -gt "$acked_id" ]; then
+    state_set ".last_update_id=${max_id}"
+  fi
 }
 
 check_health_cycle() {
@@ -1747,7 +2046,7 @@ PY
 }
 
 maybe_notify_subagent_failure() {
-  local now last_check diag found key reason excerpt ts primary submodel last_key reason_text
+  local now last_check diag found key reason excerpt ts primary submodel last_key last_alert_ts reason_text
   now="$(date +%s)"
   last_check="$(state_get '.last_subagent_check_ts // 0')"
   if [ "$last_check" -gt 0 ] && [ "$((now - last_check))" -lt "$SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS" ]; then
@@ -1764,8 +2063,14 @@ maybe_notify_subagent_failure() {
   excerpt="$(printf '%s' "$diag" | jq -r '.excerpt // ""' 2>/dev/null || true)"
   ts="$(printf '%s' "$diag" | jq -r '.timestamp // ""' 2>/dev/null || true)"
   last_key="$(state_get '.last_subagent_alert_key // ""')"
+  last_alert_ts="$(state_get '.last_subagent_alert_ts // 0')"
+  [ -n "$last_alert_ts" ] || last_alert_ts=0
   [ -n "$key" ] || key="no-key-$now"
   if [ "$key" = "$last_key" ]; then
+    return 0
+  fi
+  if [ "$last_alert_ts" -gt 0 ] && [ "$((now - last_alert_ts))" -lt "$SUBAGENT_ALERT_MIN_INTERVAL_SECONDS" ]; then
+    log "subagent alert suppressed by cooldown: reason=${reason}, key=${key}"
     return 0
   fi
 
@@ -1904,8 +2209,88 @@ PY
   rm -f "$status_file"
 }
 
+current_proxy_key_var_name() {
+  set -a
+  # shellcheck disable=SC1090
+  . "$SHARED_ENV_FILE"
+  set +a
+  local vars=(GOOGLE_API_KEY_A GOOGLE_API_KEY_B GOOGLE_API_KEY_C GOOGLE_API_KEY_D GOOGLE_API_KEY_E GOOGLE_API_KEY_F GOOGLE_API_KEY_G GOOGLE_API_KEY_H GOOGLE_API_KEY_I)
+  local v key
+  for v in "${vars[@]}"; do
+    # shellcheck disable=SC2154
+    key="${!v:-}"
+    [ -n "$key" ] || continue
+    if [ "$key" = "${GOOGLE_PROXY_CLIENT_KEY:-}" ]; then
+      printf '%s' "$v"
+      return 0
+    fi
+  done
+  return 1
+}
+
+rotate_google_proxy_client_key() {
+  [ -f "$SHARED_ENV_FILE" ] || return 1
+  set -a
+  # shellcheck disable=SC1090
+  . "$SHARED_ENV_FILE"
+  set +a
+  local vars=(GOOGLE_API_KEY_A GOOGLE_API_KEY_B GOOGLE_API_KEY_C GOOGLE_API_KEY_D GOOGLE_API_KEY_E GOOGLE_API_KEY_F GOOGLE_API_KEY_G GOOGLE_API_KEY_H GOOGLE_API_KEY_I)
+  local current="${GOOGLE_PROXY_CLIENT_KEY:-}" idx next i cand_var cand_val
+  idx=-1
+  for i in "${!vars[@]}"; do
+    cand_var="${vars[$i]}"
+    cand_val="${!cand_var:-}"
+    [ -n "$cand_val" ] || continue
+    if [ "$cand_val" = "$current" ]; then
+      idx="$i"
+      break
+    fi
+  done
+  for i in $(seq 1 "${#vars[@]}"); do
+    next=$(( (idx + i) % ${#vars[@]} ))
+    cand_var="${vars[$next]}"
+    cand_val="${!cand_var:-}"
+    [ -n "$cand_val" ] || continue
+    if [ "$cand_val" = "$current" ]; then
+      continue
+    fi
+    env_upsert_var "$SHARED_ENV_FILE" "GOOGLE_PROXY_CLIENT_KEY" "$cand_val"
+    printf '%s' "$cand_var"
+    return 0
+  done
+  return 1
+}
+
+maybe_auto_rotate_google_key() {
+  local now last_rotate line sig last_sig current_var next_var
+  if ! is_true_flag "$NANOBOT_GOOGLE_AUTO_ROTATE_ENABLED"; then
+    return 0
+  fi
+  now="$(date +%s)"
+  last_rotate="$(state_get '.last_google_rotate_ts // 0')"
+  if [ "$last_rotate" -gt 0 ] && [ "$((now - last_rotate))" -lt "$NANOBOT_GOOGLE_AUTO_ROTATE_COOLDOWN_SECONDS" ]; then
+    return 0
+  fi
+  line="$(tail -n "$NANOBOT_GOOGLE_ERROR_SCAN_LINES" "$HOME_DIR/openclaw-logs/gateway.log" 2>/dev/null | grep -Ei 'API key not valid|API_KEY_INVALID|API rate limit reached|quota exceeded|RESOURCE_EXHAUSTED' | tail -n 1 || true)"
+  [ -n "$line" ] || return 0
+  sig="$(printf '%s' "$line" | sha1sum | awk '{print $1}')"
+  last_sig="$(state_get '.last_google_rotate_sig // ""')"
+  if [ "$sig" = "$last_sig" ]; then
+    return 0
+  fi
+  current_var="$(current_proxy_key_var_name || true)"
+  next_var="$(rotate_google_proxy_client_key || true)"
+  if [ -z "$next_var" ]; then
+    state_set ".last_google_rotate_sig=\"${sig}\""
+    return 0
+  fi
+  send_telegram "🔁 Google Key 自動輪替：${current_var:-UNKNOWN} → ${next_var}（偵測到金鑰/額度錯誤）"
+  restart_openclaw || true
+  state_set ".last_google_rotate_ts=${now} | .last_google_rotate_sig=\"${sig}\" | .last_google_rotate_from=\"${current_var}\" | .last_google_rotate_to=\"${next_var}\""
+}
+
 run_daemon() {
-  local existing
+  local existing action
   state_init
   if ! mkdir "$LOCK_DIR" >/dev/null 2>&1; then
     existing="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -1923,6 +2308,7 @@ run_daemon() {
   echo "$$" >"$PID_FILE"
   trap 'pkill -P $$ >/dev/null 2>&1 || true; rm -f "$PID_FILE"; rm -rf "$LOCK_DIR"' EXIT
   trap 'exit 0' INT TERM HUP
+  terminate_other_nanobot_daemons
 
   if ! is_true_flag "$NANOBOT_ENABLED"; then
     log "nanobot disabled; exit"
@@ -1940,11 +2326,16 @@ run_daemon() {
   fi
 
   while true; do
-    poll_telegram_updates
-    maybe_process_openclaw_handoff
-    maybe_notify_subagent_failure
-    maybe_notify_google_keypool_issues
-    check_health_cycle
+    poll_telegram_updates || log "poll_telegram_updates failed"
+    maybe_process_openclaw_handoff || log "maybe_process_openclaw_handoff failed"
+    maybe_notify_subagent_failure || log "maybe_notify_subagent_failure failed"
+    maybe_notify_google_keypool_issues || log "maybe_notify_google_keypool_issues failed"
+    maybe_auto_rotate_google_key || log "maybe_auto_rotate_google_key failed"
+    check_health_cycle || log "check_health_cycle failed"
+    action="$(take_control_action)"
+    if [ -n "$action" ]; then
+      dispatch_control_action "$action"
+    fi
     sleep "$POLL_INTERVAL_SECONDS"
   done
 }

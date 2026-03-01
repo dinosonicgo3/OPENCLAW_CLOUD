@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-for s in openclaw openclaw-nanobot openclaw-subagent-sentinel openclaw-watchdog; do tmux kill-session -t "=$s" >/dev/null 2>&1 || true; done
-pkill -9 -f "openclaw-gateway|openclaw gateway|termux-rescue-nanobot.sh --daemon|openclaw-subagent-sentinel.sh|termux-openclaw-watchdog.sh --daemon" >/dev/null 2>&1 || true
+for s in openclaw openclaw-subagent-sentinel openclaw-watchdog; do tmux kill-session -t "=$s" >/dev/null 2>&1 || true; done
+pkill -9 -f "openclaw-gateway|openclaw gateway|openclaw-subagent-sentinel.sh|termux-openclaw-watchdog.sh --daemon" >/dev/null 2>&1 || true
