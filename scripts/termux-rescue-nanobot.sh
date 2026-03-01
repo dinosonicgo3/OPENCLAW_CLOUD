@@ -44,6 +44,7 @@ TELEGRAM_LONGPOLL_TIMEOUT="${TELEGRAM_LONGPOLL_TIMEOUT:-25}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-600}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-35}"
 OPENCLAW_REPLY_LAG_SECONDS="${OPENCLAW_REPLY_LAG_SECONDS:-300}"
+OPENCLAW_PENDING_USER_ALERT_MAX_AGE_SECONDS="${OPENCLAW_PENDING_USER_ALERT_MAX_AGE_SECONDS:-7200}"
 OPENCLAW_STUCK_TASK_SECONDS="${OPENCLAW_STUCK_TASK_SECONDS:-180}"
 OPENCLAW_HUNG_TASK_SECONDS="${OPENCLAW_HUNG_TASK_SECONDS:-900}"
 OPENCLAW_HUNG_TASK_CPU_MAX="${OPENCLAW_HUNG_TASK_CPU_MAX:-1.0}"
@@ -946,6 +947,80 @@ PY
       OPENCLAW_LAST_HEALTH_REASON="reply-lag-exceeded:${lag}s"
       return 1
     fi
+  fi
+
+  # Fallback lag detector: when channel inbound/outbound metrics are null or unreliable,
+  # detect pending user message without meaningful assistant reply in latest session.
+  local pending_lag
+  pending_lag="$(python3 - "$HOME_DIR/.openclaw/agents/main/sessions" <<'PY' 2>/dev/null || echo 0
+import json
+import datetime as dt
+from pathlib import Path
+import sys
+
+base = Path(sys.argv[1])
+files = sorted(base.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+if not files:
+    print(0)
+    raise SystemExit
+
+f = files[0]
+last_user = None
+last_assistant = None
+
+def parse_ts(ts):
+    if not ts:
+        return None
+    t = ts.replace("Z", "+00:00")
+    try:
+        return dt.datetime.fromisoformat(t)
+    except Exception:
+        return None
+
+def assistant_has_text(msg):
+    c = msg.get("content")
+    if isinstance(c, str):
+        return bool(c.strip())
+    if isinstance(c, list):
+        for it in c:
+            if isinstance(it, dict) and it.get("type") == "text":
+                txt = str(it.get("text") or "").strip()
+                if txt:
+                    return True
+    return False
+
+for ln in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+    try:
+        o = json.loads(ln)
+    except Exception:
+        continue
+    m = o.get("message") or {}
+    role = m.get("role")
+    ts = parse_ts(o.get("timestamp") or o.get("time") or m.get("timestamp"))
+    if ts is None:
+        continue
+    if role == "user":
+        last_user = ts
+    elif role == "assistant" and assistant_has_text(m):
+        last_assistant = ts
+
+if last_user is None:
+    print(0)
+    raise SystemExit
+if last_assistant is not None and last_assistant >= last_user:
+    print(0)
+    raise SystemExit
+
+now = dt.datetime.now(dt.timezone.utc)
+if last_user.tzinfo is None:
+    last_user = last_user.replace(tzinfo=dt.timezone.utc)
+lag = int((now - last_user).total_seconds())
+print(max(lag, 0))
+PY
+)"
+  if [ "${pending_lag:-0}" -gt "$OPENCLAW_REPLY_LAG_SECONDS" ] && [ "${pending_lag:-0}" -le "$OPENCLAW_PENDING_USER_ALERT_MAX_AGE_SECONDS" ]; then
+    OPENCLAW_LAST_HEALTH_REASON="reply-lag-exceeded:${pending_lag}s"
+    return 1
   fi
 
   if ! gateway_health_ok; then

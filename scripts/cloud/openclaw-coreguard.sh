@@ -161,7 +161,7 @@ set_value(
 commands = ensure_dict(obj, 'commands')
 set_value(commands, 'native', 'auto')
 set_value(commands, 'nativeSkills', 'auto')
-set_value(commands, 'restart', True)
+set_value(commands, 'restart', False)
 set_value(commands, 'ownerDisplay', 'raw')
 
 models = ensure_dict(obj, 'models')
