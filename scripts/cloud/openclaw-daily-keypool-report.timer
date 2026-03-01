@@ -1,0 +1,11 @@
+[Unit]
+Description=Run OpenClaw Daily Google KeyPool Report
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+RandomizedDelaySec=120
+Unit=openclaw-daily-keypool-report.service
+
+[Install]
+WantedBy=timers.target

@@ -12,6 +12,7 @@ PID_FILE="$STATE_DIR/daemon.pid"
 LOCK_DIR="$STATE_DIR/daemon.lock"
 REPAIR_LOCK_DIR="$STATE_DIR/repair.lock"
 ENV_FILE="${NANOBOT_ENV_FILE:-$HOME_DIR/.openclaw-nanobot.env}"
+SHARED_ENV_FILE="${SHARED_ENV_FILE:-$HOME_DIR/.openclaw/openclaw.env}"
 LOG_FILE="${NANOBOT_LOG_FILE:-$HOME_DIR/openclaw-logs/nanobot.log}"
 
 CORE_GUARD_SCRIPT="${CORE_GUARD_SCRIPT:-}"
@@ -51,7 +52,8 @@ SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS="${SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS:-
 SUBAGENT_ALERT_WINDOW_SECONDS="${SUBAGENT_ALERT_WINDOW_SECONDS:-300}"
 SUBAGENT_ALERT_LINES="${SUBAGENT_ALERT_LINES:-1800}"
 GOOGLE_KEYPOOL_STATUS_URL="${GOOGLE_KEYPOOL_STATUS_URL:-http://127.0.0.1:18889/__keypool/status}"
-GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS="${GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS:-300}"
+GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS="${GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS:-86400}"
+NANOBOT_GOOGLE_KEYPOOL_ALERT_ENABLED="${NANOBOT_GOOGLE_KEYPOOL_ALERT_ENABLED:-0}"
 OPENCLAW_STALE_LOCK_SECONDS="${OPENCLAW_STALE_LOCK_SECONDS:-1800}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
@@ -67,6 +69,10 @@ mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" "$HOME_DIR/tmp"
 export TMPDIR="${TMPDIR:-$HOME_DIR/tmp}"
 export PATH="$HOME_DIR/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+if [ -f "$SHARED_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$SHARED_ENV_FILE"
+fi
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   . "$ENV_FILE"
@@ -1349,6 +1355,9 @@ maybe_notify_subagent_failure() {
 
 maybe_notify_google_keypool_issues() {
   local now last_check status_file parse_file sig blocked_count last_sig msg
+  if ! is_true_flag "$NANOBOT_GOOGLE_KEYPOOL_ALERT_ENABLED"; then
+    return 0
+  fi
   now="$(date +%s)"
   last_check="$(state_get '.last_google_keypool_check_ts // 0')"
   if [ "$last_check" -gt 0 ] && [ "$((now - last_check))" -lt "$GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS" ]; then
