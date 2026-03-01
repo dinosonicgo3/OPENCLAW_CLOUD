@@ -50,6 +50,8 @@ OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS="${OPENCLAW_TIMEOUT_STORM_WINDOW_SECONDS:-
 SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS="${SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS:-30}"
 SUBAGENT_ALERT_WINDOW_SECONDS="${SUBAGENT_ALERT_WINDOW_SECONDS:-300}"
 SUBAGENT_ALERT_LINES="${SUBAGENT_ALERT_LINES:-1800}"
+GOOGLE_KEYPOOL_STATUS_URL="${GOOGLE_KEYPOOL_STATUS_URL:-http://127.0.0.1:18889/__keypool/status}"
+GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS="${GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS:-300}"
 OPENCLAW_STALE_LOCK_SECONDS="${OPENCLAW_STALE_LOCK_SECONDS:-1800}"
 NANOBOT_STARTUP_GRACE_SECONDS="${NANOBOT_STARTUP_GRACE_SECONDS:-900}"
 NANOBOT_FAIL_THRESHOLD="${NANOBOT_FAIL_THRESHOLD:-2}"
@@ -589,11 +591,14 @@ state_init() {
   "repair_updated_at": 0,
   "last_subagent_alert_key": "",
   "last_subagent_alert_ts": 0,
-  "last_subagent_check_ts": 0
+  "last_subagent_check_ts": 0,
+  "last_google_keypool_check_ts": 0,
+  "last_google_keypool_signature": "",
+  "last_google_keypool_alert_ts": 0
 }
 EOF
   fi
-  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0)'
+  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0) | .last_google_keypool_check_ts = (.last_google_keypool_check_ts // 0) | .last_google_keypool_signature = (.last_google_keypool_signature // "") | .last_google_keypool_alert_ts = (.last_google_keypool_alert_ts // 0)'
 }
 
 state_get() {
@@ -1342,6 +1347,112 @@ maybe_notify_subagent_failure() {
   state_set ".last_subagent_alert_key=\"${key}\" | .last_subagent_alert_ts=${now}"
 }
 
+maybe_notify_google_keypool_issues() {
+  local now last_check status_file parse_file sig blocked_count last_sig msg
+  now="$(date +%s)"
+  last_check="$(state_get '.last_google_keypool_check_ts // 0')"
+  if [ "$last_check" -gt 0 ] && [ "$((now - last_check))" -lt "$GOOGLE_KEYPOOL_CHECK_INTERVAL_SECONDS" ]; then
+    return 0
+  fi
+  state_set ".last_google_keypool_check_ts=${now}"
+
+  status_file="$(mktemp)"
+  if ! curl -fsS --max-time 10 "$GOOGLE_KEYPOOL_STATUS_URL" -o "$status_file" 2>/dev/null; then
+    rm -f "$status_file"
+    return 0
+  fi
+  if [ "$(jq -r '.ok // false' "$status_file" 2>/dev/null || echo false)" != "true" ]; then
+    rm -f "$status_file"
+    return 0
+  fi
+
+  sig="$(jq -c '[.keys[] | {id,blocked,reason:(.last_error.reason // ""),status:(.last_error.status // 0),until:(.blocked_until // 0)}]' "$status_file" 2>/dev/null || echo '[]')"
+  blocked_count="$(jq -r '[.keys[] | select(.blocked==true)] | length' "$status_file" 2>/dev/null || echo 0)"
+  last_sig="$(state_get '.last_google_keypool_signature // ""')"
+
+  if [ "$blocked_count" = "0" ]; then
+    state_set ".last_google_keypool_signature=$(jq -Rn --arg v "$sig" '$v')"
+    rm -f "$status_file"
+    return 0
+  fi
+
+  if [ "$sig" = "$last_sig" ]; then
+    rm -f "$status_file"
+    return 0
+  fi
+
+  parse_file="$(mktemp)"
+  if python3 - "$status_file" "$HOME_DIR/.openclaw/openclaw.env" >"$parse_file" <<'PY' 2>/dev/null
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+status_path = Path(sys.argv[1])
+env_path = Path(sys.argv[2])
+status = json.loads(status_path.read_text(encoding="utf-8"))
+id_map = {}
+if env_path.exists():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if not k.startswith("GOOGLE_API_KEY_"):
+            continue
+        v = v.strip().strip('"').strip("'")
+        if not v:
+            continue
+        kid = hashlib.sha1(v.encode("utf-8", "ignore")).hexdigest()[:12]
+        user_label = ""
+        m = re.match(r"GOOGLE_API_KEY_([A-Z])$", k)
+        if m:
+            idx = ord(m.group(1)) - ord("A") + 3
+            user_label = f"GOOGLE_KEY_{idx}"
+        id_map[kid] = {"env_name": k, "user_label": user_label}
+
+blocked = [x for x in status.get("keys", []) if bool(x.get("blocked"))]
+total = len(status.get("keys", []))
+avail = max(total - len(blocked), 0)
+lines = []
+for item in blocked:
+    kid = str(item.get("id") or "")
+    meta = id_map.get(kid, {})
+    env_name = meta.get("env_name") or "(未知環境變數)"
+    user_label = meta.get("user_label") or "(未知序號)"
+    reason = ((item.get("last_error") or {}).get("reason") or "unknown").strip()
+    status_code = (item.get("last_error") or {}).get("status")
+    until = int(item.get("blocked_until") or 0)
+    if until > 0:
+        t = dt.datetime.fromtimestamp(until, tz=dt.timezone.utc).astimezone(dt.timezone(dt.timedelta(hours=8)))
+        until_text = t.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        until_text = "未知"
+    if reason == "invalid-key":
+        reason_text = "金鑰無效或已被平台標記風險"
+    elif reason == "quota":
+        reason_text = "額度用盡或流量限制"
+    else:
+        reason_text = "未知原因"
+    lines.append(f"- {user_label}（{env_name}）: {reason_text}，HTTP {status_code}，解封時間 {until_text}")
+
+print(f"⚠️ Google Key 輪換池告警\n- 目前可用：{avail}/{total}\n- 已封鎖：{len(blocked)} 把")
+if lines:
+    print("\n".join(lines))
+PY
+  then
+    msg="$(cat "$parse_file")"
+    [ -n "$msg" ] && send_telegram "$msg"
+  fi
+  rm -f "$parse_file"
+  state_set ".last_google_keypool_signature=$(jq -Rn --arg v "$sig" '$v') | .last_google_keypool_alert_ts=${now}"
+  rm -f "$status_file"
+}
+
 run_daemon() {
   local existing
   state_init
@@ -1380,6 +1491,7 @@ run_daemon() {
   while true; do
     poll_telegram_updates
     maybe_notify_subagent_failure
+    maybe_notify_google_keypool_issues
     check_health_cycle
     sleep "$POLL_INTERVAL_SECONDS"
   done
