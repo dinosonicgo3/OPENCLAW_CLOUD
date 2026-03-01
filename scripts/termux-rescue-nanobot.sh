@@ -1228,7 +1228,8 @@ fail_pat = re.compile(
     r'FailoverError: LLM request timed out|'
     r'embedded run tool error: .*tool=sessions_spawn|'
     r'sessions_spawn.*(error|failed|fail)|'
-    r'subagent.*(failed|error|timed out)',
+    r'subagent.*(failed|timed out)|'
+    r'iserror=true',
     re.I
 )
 ignore_pat = re.compile(r'sessions_spawn tool start|sessions_spawn tool end|waiting for run end: .*timeoutMs=', re.I)
@@ -1255,6 +1256,10 @@ latest = None
 for path in (runtime_log, gateway_log):
     for line in tail_lines(path, max_lines):
         if ignore_pat.search(line):
+            continue
+        low = line.lower()
+        # Ignore successful embedded/subagent completion logs.
+        if "iserror=false" in low:
             continue
         if not fail_pat.search(line):
             continue
@@ -1289,7 +1294,7 @@ PY
 }
 
 maybe_notify_subagent_failure() {
-  local now last_check diag found key reason excerpt primary submodel fallbacks last_key
+  local now last_check diag found key reason excerpt ts primary submodel last_key reason_text
   now="$(date +%s)"
   last_check="$(state_get '.last_subagent_check_ts // 0')"
   if [ "$last_check" -gt 0 ] && [ "$((now - last_check))" -lt "$SUBAGENT_ALERT_CHECK_INTERVAL_SECONDS" ]; then
@@ -1304,6 +1309,7 @@ maybe_notify_subagent_failure() {
   key="$(printf '%s' "$diag" | jq -r '.key // ""' 2>/dev/null || true)"
   reason="$(printf '%s' "$diag" | jq -r '.reason // "subagent-failure"' 2>/dev/null || echo subagent-failure)"
   excerpt="$(printf '%s' "$diag" | jq -r '.excerpt // ""' 2>/dev/null || true)"
+  ts="$(printf '%s' "$diag" | jq -r '.timestamp // ""' 2>/dev/null || true)"
   last_key="$(state_get '.last_subagent_alert_key // ""')"
   [ -n "$key" ] || key="no-key-$now"
   if [ "$key" = "$last_key" ]; then
@@ -1312,12 +1318,25 @@ maybe_notify_subagent_failure() {
 
   primary="$(get_primary_model_from_config)"
   submodel="$(jq -r '.agents.defaults.subagents.model // empty' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || true)"
-  fallbacks="$(jq -c '.agents.defaults.model.fallbacks // []' "$HOME_DIR/.openclaw/openclaw.json" 2>/dev/null || echo '[]')"
-  send_telegram "⚠️ 子代理失敗告警：${reason}
+  case "$reason" in
+    subagent-timeout)
+      reason_text="子代理執行逾時（任務花太久，未在時限內完成）。"
+      ;;
+    sessions-spawn-failed)
+      reason_text="子代理建立失敗（無法成功啟動子代理工作）。"
+      ;;
+    subagent-auth-failed)
+      reason_text="子代理認證失敗（權杖或配對設定異常）。"
+      ;;
+    *)
+      reason_text="子代理執行異常（請檢查最近一次子代理任務）。"
+      ;;
+  esac
+  send_telegram "⚠️ 子代理異常告警
+- 我判定壞掉的部分：${reason_text}
 - 主模型：${primary:-unknown}
 - 子代理模型：${submodel:-unknown}
-- fallbacks：${fallbacks}
-- 摘要：${excerpt:-n/a}
+- 事件時間：${ts:-未知}
 （已即時回報，未自動改模型）"
   log "subagent failure alert: reason=${reason}, key=${key}, excerpt=${excerpt}"
   state_set ".last_subagent_alert_key=\"${key}\" | .last_subagent_alert_ts=${now}"

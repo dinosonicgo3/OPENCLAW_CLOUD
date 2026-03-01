@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenClaw Google KeyPool Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment=HOME=/home/ubuntu
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=TZ=Asia/Taipei
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+EnvironmentFile=-/home/ubuntu/.openclaw/openclaw.env
+EnvironmentFile=-/home/ubuntu/.openclaw/google-keypool.env
+ExecStart=/usr/bin/python3 /home/ubuntu/DINO_OPENCLAW/scripts/cloud/google-keypool-proxy.py
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
