@@ -690,6 +690,51 @@ build_brief_status_line() {
   fi
 }
 
+build_natural_diagnosis() {
+  local snapshot healthy port reason reason_text issues timeout_events blockers
+  snapshot="$(collect_openclaw_snapshot_json)"
+  healthy="$(printf '%s' "$snapshot" | jq -r '.healthy')"
+  port="$(printf '%s' "$snapshot" | jq -r '.gateway_port // ""')"
+  reason="$(printf '%s' "$snapshot" | jq -r '.unhealthy_reason // ""')"
+  reason_text="$(humanize_reason "$reason")"
+  timeout_events="$(printf '%s' "$snapshot" | jq -r '.timeout_events // 0')"
+  issues="$(printf '%s' "$snapshot" \
+    | jq -r '.recent_gateway_errors, .recent_runtime_errors' 2>/dev/null \
+    | sed '/^null$/d;/^$/d' \
+    | sanitize_issue_lines \
+    | humanize_issue_lines \
+    | tail -n 3 || true)"
+  blockers="$(detect_blocking_tasks | head -n 2 || true)"
+
+  if [ "$healthy" = "true" ]; then
+    printf '我已讀取引天渡的狀態與日誌。\n【現況】OpenClaw 正常（連接埠=%s）。\n' "${port:-unknown}"
+    if [ -n "$issues" ]; then
+      printf '【最近異常】\n%s\n' "$issues"
+    fi
+    if [ "$timeout_events" -ge "$OPENCLAW_TIMEOUT_STORM_THRESHOLD" ]; then
+      printf '【風險提醒】近期逾時偏多（%s 次），我可直接做一次非破壞性修復。\n' "$timeout_events"
+    fi
+    printf '【你可直接說】「幫我修好引天渡」或「請做完整檢查」。'
+  else
+    printf '我已讀取引天渡的狀態與日誌。\n【現況】OpenClaw 異常（連接埠=%s）。\n' "${port:-unknown}"
+    printf '【判定原因】%s\n' "${reason_text:-系統暫時無法判定。}"
+    if [ -n "$issues" ]; then
+      printf '【最近異常】\n%s\n' "$issues"
+    fi
+    if [ -n "$blockers" ]; then
+      printf '【阻塞任務】\n%s\n' "$blockers"
+    fi
+    printf '【我可以直接做】先清阻塞/清殘留，再重啟與修復。你只要回「直接修復」。'
+  fi
+}
+
+text_requests_repair_now() {
+  local text_norm
+  text_norm="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  printf '%s' "$text_norm" | grep -Eiq \
+    '(直接|立刻|馬上|趕快|立即).*(修|救|處理|排除)|幫我.*(修|救|處理|排除)|請.*(修|救|處理|排除)|修復|修好|救援|回滾|重建|排錯|除錯|復原|重啟'
+}
+
 rescue_manual_brief() {
   cat <<'EOF'
 🦀 潤天蟹救援手冊（摘要）
@@ -1063,10 +1108,9 @@ model_chat_reply() {
   runtime_json="$(resolve_model_runtime_json "$NANOBOT_MODEL")"
   supported="$(printf '%s' "$runtime_json" | jq -r '.supported // false' 2>/dev/null || echo false)"
   if [ "$supported" != "true" ]; then
-    printf '%s\n%s\n%s\n' \
-      "目前模型平台不支援潤天蟹直接對話，請先用 /model set nvidia/z-ai/glm5 或 /model set openrouter/<model>。" \
-      "$(build_brief_status_line)" \
-      "你也可以輸入 /model list 看可切換模型。"
+    printf '%s\n%s\n' \
+      "目前潤天蟹的對話模型不可用，我先用內建診斷直接回報。" \
+      "$(build_natural_diagnosis)"
     return 0
   fi
   base_url="$(printf '%s' "$runtime_json" | jq -r '.baseUrl // empty' 2>/dev/null || true)"
@@ -1074,7 +1118,9 @@ model_chat_reply() {
   key_env_id="$(printf '%s' "$runtime_json" | jq -r '.apiKeyEnvId // empty' 2>/dev/null || true)"
   key_value="${!key_env_id:-}"
   if [ -z "$key_value" ]; then
-    printf '%s\n' "$(build_brief_status_line)"
+    printf '%s\n%s\n' \
+      "目前模型金鑰未載入，我先用內建診斷直接回報。" \
+      "$(build_natural_diagnosis)"
     return 0
   fi
   payload="$(jq -n --arg model "$model_id" --arg text "$user_text" --arg snapshot "$snapshot_json" '
@@ -1084,7 +1130,7 @@ model_chat_reply() {
       messages: [
         {
           role: "system",
-          content: "你是潤天蟹，OpenClaw 戰地醫護兵。部署環境是 Oracle Cloud Ubuntu（非手機 Termux）。請用繁體中文簡潔回覆。你必須根據系統診斷資訊回答，不要叫使用者輸入斜線指令。若可直接處理，直接處理；若需要修復，先做根因判斷，再清楚說明你將執行什麼。優先檢查：1) telegram channel 是否 running 2) inbound/outbound 是否失衡 3) 是否有 qmd embed / node-llama-cpp / cmake-js-llama 阻塞任務。"
+          content: "你是潤天蟹，OpenClaw 戰地醫護兵。部署環境是 Oracle Cloud Ubuntu（非手機 Termux）。請用繁體中文簡潔回覆。必須先依據診斷快照回答，不可猜測。禁止叫使用者輸入斜線指令。回覆格式固定三段：1)【現況】2)【原因判斷】3)【下一步】。若使用者已明確要求修復，第三段要直接寫「我將立即修復」，不要反問。優先檢查：telegram channel running、inbound/outbound 失衡、qmd/node-llama-cpp/cmake-js-llama 阻塞。"
         },
         {
           role: "system",
@@ -1103,10 +1149,9 @@ model_chat_reply() {
     -d "$payload" 2>/dev/null || true)"
   content="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)"
   if [ -z "$content" ]; then
-    printf '%s\n%s\n%s\n' \
-      "我先直接回報現況：" \
-      "$(build_brief_status_line)" \
-      "你可直接說：要我做健康檢查、看最近錯誤，或執行修復。"
+    printf '%s\n%s\n' \
+      "模型暫時沒有回覆，我先用內建診斷回報。" \
+      "$(build_natural_diagnosis)"
   else
     printf '%s\n' "$content"
   fi
@@ -1127,7 +1172,7 @@ classify_natural_intent() {
     INTENT_REASON="keyword-status"
     return 0
   fi
-  if printf '%s' "$text_norm" | grep -Eiq '日誌|log|後台|系統資訊|診斷|檢查|狀況|github|版本|更新|運行'; then
+  if printf '%s' "$text_norm" | grep -Eiq '為什麼|原因|怎麼了|怎麼回事|日誌|log|後台|系統資訊|診斷|檢查|狀況|github|版本|更新|運行'; then
     INTENT_CLASS="diagnose"
     INTENT_REASON="keyword-diagnose"
     return 0
@@ -1137,7 +1182,7 @@ classify_natural_intent() {
     INTENT_REASON="keyword-rollback"
     return 0
   fi
-  if printf '%s' "$text_norm" | grep -Eiq '救援|修復|修好|修正|除錯|排錯|復原|掛了|當機|故障|失聯|沒反應|crash|broken|fix|repair|rescue'; then
+  if text_requests_repair_now "$text_norm" || printf '%s' "$text_norm" | grep -Eiq '救援|修復|修好|修正|除錯|排錯|復原|掛了|當機|故障|失聯|沒反應|crash|broken|fix|repair|rescue'; then
     INTENT_CLASS="repair"
     INTENT_REASON="keyword-repair"
     return 0
@@ -1432,10 +1477,16 @@ $(repair_status_summary)"
             diagnose)
               send_telegram_to_chat "$chat_id" "$(build_status_report)
 $(repair_status_summary)"
+              if text_requests_repair_now "$text"; then
+                run_repair_playbook "natural:${reason}-auto-repair"
+              fi
               ;;
             status)
               send_telegram_to_chat "$chat_id" "$(build_status_report)
 $(repair_status_summary)"
+              if text_requests_repair_now "$text"; then
+                run_repair_playbook "natural:${reason}-auto-repair"
+              fi
               ;;
             chat|*)
               reply="$(model_chat_reply "$text")"
