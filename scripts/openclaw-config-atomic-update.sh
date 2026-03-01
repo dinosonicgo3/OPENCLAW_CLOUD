@@ -7,12 +7,53 @@ OPENCLAW_BIN="${OPENCLAW_BIN:-$HOME/.npm-global/bin/openclaw}"
 SERVICE_NAME="${OPENCLAW_SERVICE_NAME:-openclaw.service}"
 BASELINE_PROFILE_PATH="${OPENCLAW_BASELINE_PROFILE_PATH:-$HOME/DINO_OPENCLAW/scripts/cloud/openclaw.stable.full.json}"
 DISALLOW_MINIMAL_TEMPLATE="${OPENCLAW_DISALLOW_MINIMAL_TEMPLATE:-1}"
+BACKUP_KEEP_COUNT="${OPENCLAW_BACKUP_KEEP_COUNT:-15}"
+BACKUP_MAX_AGE_DAYS="${OPENCLAW_BACKUP_MAX_AGE_DAYS:-7}"
 
 JQ_FILTER=""
 JQ_FILE=""
 REPLACE_FILE=""
 DRY_RUN=0
 RESTART=0
+
+prune_openclaw_backups() {
+  local keep max_age remaining
+  keep="$BACKUP_KEEP_COUNT"
+  max_age="$BACKUP_MAX_AGE_DAYS"
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=15
+  [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=7
+
+  if [ ! -d "$BACKUP_DIR" ]; then
+    return 0
+  fi
+
+  if [ "$max_age" -gt 0 ]; then
+    find "$BACKUP_DIR" -maxdepth 1 -type f \
+      \( -name 'openclaw.json.pre-*' -o -name 'openclaw.json.bak.*' \) \
+      -mtime +"$max_age" -delete 2>/dev/null || true
+  fi
+
+  if [ "$keep" -ge 0 ]; then
+    local idx=0
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      idx=$((idx + 1))
+      if [ "$idx" -le "$keep" ]; then
+        continue
+      fi
+      rm -f "$file" >/dev/null 2>&1 || true
+    done < <(
+      find "$BACKUP_DIR" -maxdepth 1 -type f \
+        \( -name 'openclaw.json.pre-*' -o -name 'openclaw.json.bak.*' \) \
+        -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | awk '{ $1=""; sub(/^ /,""); print }'
+    )
+  fi
+
+  remaining="$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name 'openclaw.json.pre-*' -o -name 'openclaw.json.bak.*' \) | wc -l | tr -d ' ' || echo 0)"
+  echo "[atomic-update] backup prune keep=$keep ageDays=$max_age remaining=$remaining"
+}
 
 usage() {
   cat <<USAGE
@@ -245,3 +286,5 @@ if [ "$RESTART" -eq 1 ]; then
   state="$(systemctl is-active "$SERVICE_NAME" || true)"
   echo "[atomic-update] service $SERVICE_NAME state=$state"
 fi
+
+prune_openclaw_backups
