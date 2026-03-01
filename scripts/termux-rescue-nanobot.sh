@@ -1216,6 +1216,15 @@ delegate_nanobot_self_fix_to_openclaw() {
   return 0
 }
 
+is_internal_test_handoff() {
+  local type="${1:-}" reason="${2:-}" detail="${3:-}" all
+  all="$(printf '%s %s %s' "$type" "$reason" "$detail" | tr '[:upper:]' '[:lower:]')"
+  if printf '%s' "$all" | grep -Eq '(^|[^a-z])(noop|verify|smoke|smoke-test|test)([^a-z]|$)'; then
+    return 0
+  fi
+  return 1
+}
+
 maybe_process_openclaw_handoff() {
   local task id type reason detail result note
   if ! is_true_flag "$HANDOFF_ENABLED"; then
@@ -1229,6 +1238,14 @@ maybe_process_openclaw_handoff() {
   reason="$(printf '%s' "$task" | jq -r '.reason // empty' 2>/dev/null || true)"
   detail="$(printf '%s' "$task" | jq -r '.detail // empty' 2>/dev/null || true)"
   [ -n "$id" ] || return 0
+
+  # Ignore internal smoke/verify/noop tasks quietly to avoid spamming user Telegram.
+  if is_internal_test_handoff "$type" "$reason" "$detail"; then
+    note="internal-test-ignored:${type}:${reason}"
+    "$HANDOFF_SCRIPT" complete --id "$id" --status skipped --note "$note" --actor nanobot >/dev/null 2>&1 || true
+    log "ignored internal test handoff: id=${id} type=${type} reason=${reason}"
+    return 0
+  fi
 
   case "$type" in
     openclaw-core-fix|openclaw-core-repair|openclaw-rescue)
