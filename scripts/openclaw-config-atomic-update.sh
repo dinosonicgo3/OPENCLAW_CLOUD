@@ -9,6 +9,9 @@ BASELINE_PROFILE_PATH="${OPENCLAW_BASELINE_PROFILE_PATH:-$HOME/DINO_OPENCLAW/scr
 DISALLOW_MINIMAL_TEMPLATE="${OPENCLAW_DISALLOW_MINIMAL_TEMPLATE:-1}"
 BACKUP_KEEP_COUNT="${OPENCLAW_BACKUP_KEEP_COUNT:-15}"
 BACKUP_MAX_AGE_DAYS="${OPENCLAW_BACKUP_MAX_AGE_DAYS:-7}"
+HOME_BACKUP_DIR="${OPENCLAW_HOME_BACKUP_DIR:-$HOME/backups}"
+HOME_BACKUP_KEEP_COUNT="${OPENCLAW_HOME_BACKUP_KEEP_COUNT:-5}"
+HOME_BACKUP_MAX_AGE_DAYS="${OPENCLAW_HOME_BACKUP_MAX_AGE_DAYS:-14}"
 
 JQ_FILTER=""
 JQ_FILE=""
@@ -53,6 +56,45 @@ prune_openclaw_backups() {
 
   remaining="$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name 'openclaw.json.pre-*' -o -name 'openclaw.json.bak.*' \) | wc -l | tr -d ' ' || echo 0)"
   echo "[atomic-update] backup prune keep=$keep ageDays=$max_age remaining=$remaining"
+}
+
+prune_home_backup_artifacts() {
+  local keep max_age remaining
+  keep="$HOME_BACKUP_KEEP_COUNT"
+  max_age="$HOME_BACKUP_MAX_AGE_DAYS"
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=5
+  [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=14
+
+  if [ ! -d "$HOME_BACKUP_DIR" ]; then
+    return 0
+  fi
+
+  if [ "$max_age" -gt 0 ]; then
+    find "$HOME_BACKUP_DIR" -maxdepth 1 -type f \
+      \( -name 'openclaw-state-*.tar.gz' -o -name 'DINO_OPENCLAW*.bundle' \) \
+      -mtime +"$max_age" -delete 2>/dev/null || true
+  fi
+
+  if [ "$keep" -ge 0 ]; then
+    local idx=0
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      idx=$((idx + 1))
+      if [ "$idx" -le "$keep" ]; then
+        continue
+      fi
+      rm -f "$file" >/dev/null 2>&1 || true
+    done < <(
+      find "$HOME_BACKUP_DIR" -maxdepth 1 -type f \
+        \( -name 'openclaw-state-*.tar.gz' -o -name 'DINO_OPENCLAW*.bundle' \) \
+        -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | awk '{ $1=""; sub(/^ /,""); print }'
+    )
+  fi
+
+  remaining="$(find "$HOME_BACKUP_DIR" -maxdepth 1 -type f \( -name 'openclaw-state-*.tar.gz' -o -name 'DINO_OPENCLAW*.bundle' \) | wc -l | tr -d ' ' || echo 0)"
+  echo "[atomic-update] home-backup prune keep=$keep ageDays=$max_age remaining=$remaining"
 }
 
 usage() {
@@ -288,3 +330,4 @@ if [ "$RESTART" -eq 1 ]; then
 fi
 
 prune_openclaw_backups
+prune_home_backup_artifacts
