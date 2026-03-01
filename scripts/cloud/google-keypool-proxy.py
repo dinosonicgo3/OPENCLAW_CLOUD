@@ -50,6 +50,9 @@ def load_keys() -> list[str]:
         v = os.environ.get(f"GOOGLE_API_KEY_{i}", "").strip()
         if v:
             keys.append(v)
+        v2 = os.environ.get(f"GOOGLE_KEY_{i}", "").strip()
+        if v2:
+            keys.append(v2)
     out = []
     seen = set()
     for k in keys:
@@ -234,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = {}
         for k, v in self.headers.items():
             lk = k.lower()
-            if lk in ("host", "content-length", "connection"):
+            if lk in ("host", "content-length", "connection", "x-goog-api-key", "authorization"):
                 continue
             headers[k] = v
 

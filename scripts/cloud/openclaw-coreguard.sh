@@ -98,6 +98,20 @@ agents = ensure_dict(obj, 'agents')
 defs = ensure_dict(agents, 'defaults')
 model = ensure_dict(defs, 'model')
 primary_model = str(model.get('primary') or 'nvidia/z-ai/glm5').strip() or 'nvidia/z-ai/glm5'
+main_provider = primary_model.split('/', 1)[0].lower()
+search_provider_map = {
+    'google': 'gemini',
+    'gemini': 'gemini',
+    'kimi': 'kimi',
+    'moonshot': 'kimi',
+    'grok': 'grok',
+    'perplexity': 'perplexity',
+}
+search_provider = search_provider_map.get(main_provider, 'gemini')
+tools = ensure_dict(obj, 'tools')
+web = ensure_dict(tools, 'web')
+search = ensure_dict(web, 'search')
+set_value(search, 'provider', search_provider)
 set_value(model, 'primary', primary_model)
 if model.get('fallbacks') != []:
     model['fallbacks'] = []
@@ -152,6 +166,15 @@ set_value(commands, 'ownerDisplay', 'raw')
 
 models = ensure_dict(obj, 'models')
 providers = ensure_dict(models, 'providers')
+
+google = ensure_dict(providers, 'google')
+set_value(google, 'baseUrl', 'http://127.0.0.1:18889/v1beta')
+if not isinstance(google.get('apiKey'), dict):
+    google['apiKey'] = {}
+    changed = True
+g_api = google['apiKey']
+set_value(g_api, 'id', 'GOOGLE_PROXY_CLIENT_KEY')
+
 nvidia = ensure_dict(providers, 'nvidia')
 nvidia_models = nvidia.get('models') if isinstance(nvidia.get('models'), list) else []
 normalized = []
