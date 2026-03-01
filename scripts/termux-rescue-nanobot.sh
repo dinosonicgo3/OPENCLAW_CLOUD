@@ -482,10 +482,9 @@ EOF
 }
 
 gateway_health_ok() {
-  local health_json
-  health_json="$(run_with_timeout "$HEALTH_TIMEOUT_SECONDS" "$OPENCLAW_BIN" health --json 2>/dev/null || true)"
-  [ -n "$health_json" ] || return 1
-  printf '%s' "$health_json" | jq -e '.ok == true or .healthy == true or .status == "ok"' >/dev/null 2>&1
+  # Prefer channel-aware health because `openclaw health --json` can report
+  # stale false negatives while channels are actually running.
+  openclaw_healthy
 }
 
 enforce_stable_model_defaults() {
