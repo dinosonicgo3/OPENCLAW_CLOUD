@@ -114,9 +114,9 @@ if follow_primary:
     set_value(subagents, 'model', primary_model)
 elif not str(subagents.get('model') or '').strip():
     set_value(subagents, 'model', primary_model)
-set_value(subagents, 'runTimeoutSeconds', 900)
-set_value(subagents, 'announceTimeoutMs', 180000)
-set_value(subagents, 'maxConcurrent', 6)
+set_value(subagents, 'runTimeoutSeconds', 300)
+set_value(subagents, 'announceTimeoutMs', 120000)
+set_value(subagents, 'maxConcurrent', 3)
 
 memory_search = ensure_dict(defs, 'memorySearch')
 set_value(memory_search, 'provider', 'local')
@@ -141,7 +141,7 @@ set_value(flush_cfg, 'softThresholdTokens', 4000)
 set_value(
     flush_cfg,
     'prompt',
-    'Write any lasting notes, rules, facts or preferences to memory/YYYY-MM-DD.md or MEMORY.md. Reply NO_REPLY if nothing to store.'
+    'Internal memory flush only. Write lasting notes, rules, facts, or preferences to memory/YYYY-MM-DD.md or MEMORY.md. If nothing to store, output NO_REPLY internally. Never expose NO_REPLY or internal signals in user-facing replies.'
 )
 
 commands = ensure_dict(obj, 'commands')
