@@ -71,6 +71,9 @@ NANOBOT_RESCUE_COOLDOWN_SECONDS="${NANOBOT_RESCUE_COOLDOWN_SECONDS:-1800}"
 NANOBOT_STARTUP_NOTIFY="${NANOBOT_STARTUP_NOTIFY:-0}"
 NANOBOT_REPAIR_TRIGGER_COOLDOWN_SECONDS="${NANOBOT_REPAIR_TRIGGER_COOLDOWN_SECONDS:-90}"
 MAX_TELEGRAM_TEXT_BYTES="${MAX_TELEGRAM_TEXT_BYTES:-3500}"
+TELEGRAM_CHUNK_BODY_CHARS="${TELEGRAM_CHUNK_BODY_CHARS:-3500}"
+TEMP_CLEANUP_RETENTION_DAYS="${TEMP_CLEANUP_RETENTION_DAYS:-7}"
+TEMP_CLEANUP_INTERVAL_SECONDS="${TEMP_CLEANUP_INTERVAL_SECONDS:-21600}"
 NANOBOT_TYPING_MAX_SECONDS="${NANOBOT_TYPING_MAX_SECONDS:-120}"
 NANOBOT_TYPING_INTERVAL_SECONDS="${NANOBOT_TYPING_INTERVAL_SECONDS:-3}"
 NANOBOT_INCLUDE_UPSTREAM_CHECK="${NANOBOT_INCLUDE_UPSTREAM_CHECK:-0}"
@@ -339,6 +342,44 @@ truncate_telegram_text() {
   else
     printf '%s' "$msg"
   fi
+}
+
+split_telegram_text_chunks() {
+  local msg="$1" max_chars="${2:-$TELEGRAM_CHUNK_BODY_CHARS}"
+  [[ "$max_chars" =~ ^[0-9]+$ ]] || max_chars=3500
+  [ "$max_chars" -ge 200 ] || max_chars=3500
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '%s\0' "$(truncate_telegram_text "$msg")"
+    return 0
+  fi
+  printf '%s' "$msg" | python3 - "$max_chars" <<'PY'
+import sys
+
+max_chars = int(sys.argv[1]) if len(sys.argv) > 1 else 3500
+if max_chars < 200:
+    max_chars = 3500
+text = sys.stdin.read()
+if text is None:
+    text = ""
+
+chunks = []
+remaining = text
+while len(remaining) > max_chars:
+    window = remaining[:max_chars]
+    cut = max(window.rfind("\n\n"), window.rfind("\n"), window.rfind(" "))
+    if cut < int(max_chars * 0.5):
+        cut = max_chars
+    chunk = remaining[:cut].rstrip()
+    if not chunk:
+        chunk = remaining[:max_chars]
+    chunks.append(chunk)
+    remaining = remaining[len(chunk):].lstrip()
+chunks.append(remaining)
+
+for part in chunks:
+    sys.stdout.write(part)
+    sys.stdout.write("\0")
+PY
 }
 
 detect_blocking_tasks() {
@@ -841,12 +882,13 @@ state_init() {
   "last_google_keypool_alert_ts": 0,
   "last_repair_trigger_key": "",
   "last_repair_trigger_ts": 0,
+  "last_temp_cleanup_ts": 0,
   "control_action": "",
   "control_action_ts": 0
 }
 EOF
   fi
-  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0) | .last_google_keypool_check_ts = (.last_google_keypool_check_ts // 0) | .last_google_keypool_signature = (.last_google_keypool_signature // "") | .last_google_keypool_alert_ts = (.last_google_keypool_alert_ts // 0) | .last_repair_trigger_key = (.last_repair_trigger_key // "") | .last_repair_trigger_ts = (.last_repair_trigger_ts // 0) | .control_action = (.control_action // "") | .control_action_ts = (.control_action_ts // 0)'
+  state_set '.last_subagent_alert_key = (.last_subagent_alert_key // "") | .last_subagent_alert_ts = (.last_subagent_alert_ts // 0) | .last_subagent_check_ts = (.last_subagent_check_ts // 0) | .last_google_keypool_check_ts = (.last_google_keypool_check_ts // 0) | .last_google_keypool_signature = (.last_google_keypool_signature // "") | .last_google_keypool_alert_ts = (.last_google_keypool_alert_ts // 0) | .last_repair_trigger_key = (.last_repair_trigger_key // "") | .last_repair_trigger_ts = (.last_repair_trigger_ts // 0) | .last_temp_cleanup_ts = (.last_temp_cleanup_ts // 0) | .control_action = (.control_action // "") | .control_action_ts = (.control_action_ts // 0)'
 }
 
 state_get() {
@@ -959,30 +1001,140 @@ repair_status_summary() {
 
 send_telegram() {
   local msg="$1"
-  local msg_to_send
+  local chat_id
   [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
   [ -n "$TELEGRAM_OWNER_ID" ] || return 0
-  msg_to_send="$(truncate_telegram_text "$msg")"
+  chat_id="$TELEGRAM_OWNER_ID"
+  send_telegram_to_chat "$chat_id" "$msg"
+}
+
+telegram_send_raw() {
+  local chat_id="$1"
+  local msg="$2"
+  [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
+  [ -n "$chat_id" ] || return 0
   curl -fsS --max-time 20 \
     -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${TELEGRAM_OWNER_ID}" \
-    --data-urlencode "text=${msg_to_send}" \
+    -d "chat_id=${chat_id}" \
+    --data-urlencode "text=${msg}" \
     -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
 }
 
 send_telegram_to_chat() {
   local chat_id="$1"
   local msg="$2"
-  local msg_to_send
+  local chunk part idx total prefix
+  local -a chunks
+  chunks=()
   [ -n "$TELEGRAM_BOT_TOKEN" ] || return 0
   [ -n "$chat_id" ] || chat_id="$TELEGRAM_OWNER_ID"
   [ -n "$chat_id" ] || return 0
-  msg_to_send="$(truncate_telegram_text "$msg")"
-  curl -fsS --max-time 20 \
-    -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${chat_id}" \
-    --data-urlencode "text=${msg_to_send}" \
-    -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
+  while IFS= read -r -d '' chunk; do
+    chunks+=("$chunk")
+  done < <(split_telegram_text_chunks "$msg" "$TELEGRAM_CHUNK_BODY_CHARS")
+  if [ "${#chunks[@]}" -eq 0 ]; then
+    chunks+=("$(truncate_telegram_text "$msg")")
+  fi
+  total="${#chunks[@]}"
+  for idx in "${!chunks[@]}"; do
+    part="${chunks[$idx]}"
+    if [ "$total" -gt 1 ]; then
+      prefix="[$((idx + 1))/${total}] "
+      part="${prefix}${part}"
+    fi
+    telegram_send_raw "$chat_id" "$part"
+  done
+}
+
+cleanup_completed_handoff_tasks() {
+  local task_dir="$HOME_DIR/OpenClawVault/interop/tasks"
+  local retention_days="$1"
+  [ -d "$task_dir" ] || {
+    printf '0'
+    return 0
+  }
+  python3 - "$task_dir" "$retention_days" <<'PY' 2>/dev/null || echo 0
+import json
+import pathlib
+import sys
+import time
+
+task_dir = pathlib.Path(sys.argv[1])
+days = int(sys.argv[2]) if len(sys.argv) > 2 else 7
+if days < 1:
+    days = 7
+cutoff = time.time() - (days * 86400)
+removed = 0
+for path in task_dir.glob("*.json"):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    status = str(data.get("status") or "").lower()
+    if status not in {"done", "failed", "skipped"}:
+        continue
+    ts = data.get("updated_at") or data.get("completed_at")
+    try:
+        ts = float(ts)
+    except Exception:
+        ts = path.stat().st_mtime
+    if ts <= cutoff:
+        try:
+            path.unlink()
+            removed += 1
+        except Exception:
+            pass
+print(removed)
+PY
+}
+
+run_temp_cleanup_once() {
+  local days deleted_tmp deleted_runtime deleted_state deleted_repo_tmp deleted_logs deleted_handoff
+  days="$TEMP_CLEANUP_RETENTION_DAYS"
+  [[ "$days" =~ ^[0-9]+$ ]] || days=7
+  [ "$days" -ge 1 ] || days=7
+
+  deleted_tmp=0
+  deleted_runtime=0
+  deleted_state=0
+  deleted_repo_tmp=0
+  deleted_logs=0
+  deleted_handoff=0
+
+  if [ -d "$HOME_DIR/tmp" ]; then
+    deleted_tmp="$(find "$HOME_DIR/tmp" -mindepth 1 -type f -mtime +"$days" -print -delete 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+    find "$HOME_DIR/tmp" -mindepth 1 -type d -empty -mtime +"$days" -delete 2>/dev/null || true
+  fi
+  if [ -d "/tmp/openclaw" ]; then
+    deleted_runtime="$(find "/tmp/openclaw" -mindepth 1 -type f -mtime +"$days" -print -delete 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+    find "/tmp/openclaw" -mindepth 1 -type d -empty -mtime +"$days" -delete 2>/dev/null || true
+  fi
+  if [ -d "$STATE_DIR" ]; then
+    deleted_state="$(find "$STATE_DIR" -maxdepth 3 -type f \( -name '*.tmp' -o -name '*.temp' -o -name '*test*' -o -name '*.partial' \) -mtime +"$days" -print -delete 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  fi
+  if [ -d "$REPO_DIR/scripts" ]; then
+    deleted_repo_tmp="$(find "$REPO_DIR/scripts" -maxdepth 4 -type f \( -name '*.bak.*' -o -name '*.tmp' -o -name '*.temp' -o -name '*-test-*' -o -name '*.test.*' \) -mtime +"$days" -print -delete 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  fi
+  if [ -d "$HOME_DIR/openclaw-logs" ]; then
+    deleted_logs="$(find "$HOME_DIR/openclaw-logs" -maxdepth 3 -type f \( -name '*.tmp' -o -name '*.temp' -o -name '*test*' -o -name '*.partial' \) -mtime +"$days" -print -delete 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  fi
+  deleted_handoff="$(cleanup_completed_handoff_tasks "$days")"
+  log "temp cleanup: days=${days} home_tmp=${deleted_tmp} runtime_tmp=${deleted_runtime} state_tmp=${deleted_state} repo_tmp=${deleted_repo_tmp} log_tmp=${deleted_logs} handoff_done=${deleted_handoff}"
+}
+
+maybe_run_temp_cleanup() {
+  local now last interval
+  now="$(date +%s)"
+  interval="$TEMP_CLEANUP_INTERVAL_SECONDS"
+  [[ "$interval" =~ ^[0-9]+$ ]] || interval=21600
+  [ "$interval" -ge 60 ] || interval=21600
+  last="$(state_get '.last_temp_cleanup_ts // 0' 2>/dev/null || echo 0)"
+  [ -n "$last" ] || last=0
+  if [ "$last" -gt 0 ] && [ "$((now - last))" -lt "$interval" ]; then
+    return 0
+  fi
+  run_temp_cleanup_once || true
+  state_set ".last_temp_cleanup_ts=${now}"
 }
 
 start_typing_loop() {
@@ -1595,6 +1747,17 @@ is_internal_test_handoff() {
   return 1
 }
 
+is_handoff_report_limit_reason() {
+  local reason="${1:-}" detail="${2:-}" combined
+  combined="$(printf '%s %s' "$reason" "$detail" | tr '[:upper:]' '[:lower:]')"
+  case "$combined" in
+    *handoff:*telegram*|*telegram*limit*|*telegram*too*long*|*telegram*message*too*long*|*message*too*long*|*report*too*long*|*4096*|*telegram*限制*|*telegram*長度*|*訊息*過長*|*回報訊息*超過*|*超過*telegram*限制*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 maybe_process_openclaw_handoff() {
   local task id from type reason detail result note
   if ! is_true_flag "$HANDOFF_ENABLED"; then
@@ -1620,6 +1783,13 @@ maybe_process_openclaw_handoff() {
 
   case "$type" in
     openclaw-core-fix|openclaw-core-repair|openclaw-rescue)
+      if is_handoff_report_limit_reason "$reason" "$detail"; then
+        note="handled-by-nanobot:report-limit-only"
+        "$HANDOFF_SCRIPT" complete --id "$id" --status done --note "$note" --actor nanobot >/dev/null 2>&1 || true
+        send_telegram "ℹ️ 潤天蟹：交辦原因屬於 Telegram 訊息長度限制，已標記完成並跳過錯誤修復流程（任務ID：${id}）。"
+        log "handoff treated as report-limit only: id=${id} reason=${reason}"
+        return 0
+      fi
       send_telegram "🤝 潤天蟹收到引天渡交辦：修復 OpenClaw（任務ID：${id}）。"
       if run_repair_playbook "handoff:${reason:-openclaw-handoff}"; then
         note="handled-by-nanobot:openclaw-repaired"
@@ -2331,6 +2501,7 @@ run_daemon() {
     maybe_notify_subagent_failure || log "maybe_notify_subagent_failure failed"
     maybe_notify_google_keypool_issues || log "maybe_notify_google_keypool_issues failed"
     maybe_auto_rotate_google_key || log "maybe_auto_rotate_google_key failed"
+    maybe_run_temp_cleanup || log "maybe_run_temp_cleanup failed"
     check_health_cycle || log "check_health_cycle failed"
     action="$(take_control_action)"
     if [ -n "$action" ]; then
@@ -2369,6 +2540,7 @@ case "${1:---daemon}" in
   --once)
     state_init
     poll_telegram_updates
+    maybe_run_temp_cleanup
     maybe_notify_subagent_failure
     check_health_cycle
     ;;

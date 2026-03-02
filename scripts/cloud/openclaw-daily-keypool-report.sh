@@ -6,6 +6,8 @@ KEYPOOL_URL="${KEYPOOL_URL:-http://127.0.0.1:18889/__keypool/status}"
 STATE_DIR="${STATE_DIR:-/home/ubuntu/.openclaw-watchdog}"
 STATE_FILE="${STATE_FILE:-$STATE_DIR/keypool-daily-report-state.json}"
 OWNER_ID="${TELEGRAM_OWNER_ID:-6002298888}"
+TELEGRAM_CHUNK_BODY_CHARS="${TELEGRAM_CHUNK_BODY_CHARS:-3500}"
+TEMP_CLEANUP_RETENTION_DAYS="${TEMP_CLEANUP_RETENTION_DAYS:-7}"
 
 mkdir -p "$STATE_DIR"
 
@@ -15,6 +17,86 @@ fi
 
 TOKEN="$(sed -n 's/^TELEGRAM_BOT_TOKEN="\(.*\)"$/\1/p' "$OPENCLAW_ENV" | head -n1)"
 [ -n "$TOKEN" ] || exit 0
+
+telegram_send_raw() {
+  local chat_id="$1"
+  local msg="$2"
+  curl -fsS --max-time 20 \
+    -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+    -d "chat_id=${chat_id}" \
+    --data-urlencode "text=${msg}" \
+    -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
+}
+
+split_telegram_text_chunks() {
+  local msg="$1" max_chars="${2:-$TELEGRAM_CHUNK_BODY_CHARS}"
+  [[ "$max_chars" =~ ^[0-9]+$ ]] || max_chars=3500
+  [ "$max_chars" -ge 200 ] || max_chars=3500
+  printf '%s' "$msg" | python3 - "$max_chars" <<'PY'
+import sys
+
+max_chars = int(sys.argv[1]) if len(sys.argv) > 1 else 3500
+if max_chars < 200:
+    max_chars = 3500
+text = sys.stdin.read()
+if text is None:
+    text = ""
+chunks = []
+remaining = text
+while len(remaining) > max_chars:
+    window = remaining[:max_chars]
+    cut = max(window.rfind("\n\n"), window.rfind("\n"), window.rfind(" "))
+    if cut < int(max_chars * 0.5):
+        cut = max_chars
+    chunk = remaining[:cut].rstrip()
+    if not chunk:
+        chunk = remaining[:max_chars]
+    chunks.append(chunk)
+    remaining = remaining[len(chunk):].lstrip()
+chunks.append(remaining)
+for part in chunks:
+    sys.stdout.write(part)
+    sys.stdout.write("\0")
+PY
+}
+
+send_telegram_chunked() {
+  local chat_id="$1"
+  local msg="$2"
+  local chunk part idx total prefix
+  local -a chunks
+  chunks=()
+  while IFS= read -r -d '' chunk; do
+    chunks+=("$chunk")
+  done < <(split_telegram_text_chunks "$msg" "$TELEGRAM_CHUNK_BODY_CHARS")
+  if [ "${#chunks[@]}" -eq 0 ]; then
+    chunks+=("$msg")
+  fi
+  total="${#chunks[@]}"
+  for idx in "${!chunks[@]}"; do
+    part="${chunks[$idx]}"
+    if [ "$total" -gt 1 ]; then
+      prefix="[$((idx + 1))/${total}] "
+      part="${prefix}${part}"
+    fi
+    telegram_send_raw "$chat_id" "$part"
+  done
+}
+
+run_temp_cleanup_once() {
+  local days
+  days="$TEMP_CLEANUP_RETENTION_DAYS"
+  [[ "$days" =~ ^[0-9]+$ ]] || days=7
+  [ "$days" -ge 1 ] || days=7
+  if [ -d "/home/ubuntu/tmp" ]; then
+    find "/home/ubuntu/tmp" -mindepth 1 -type f -mtime +"$days" -delete 2>/dev/null || true
+    find "/home/ubuntu/tmp" -mindepth 1 -type d -empty -mtime +"$days" -delete 2>/dev/null || true
+  fi
+  if [ -d "/tmp/openclaw" ]; then
+    find "/tmp/openclaw" -mindepth 1 -type f -mtime +"$days" -delete 2>/dev/null || true
+    find "/tmp/openclaw" -mindepth 1 -type d -empty -mtime +"$days" -delete 2>/dev/null || true
+  fi
+}
 
 today="$(date +%F)"
 last_day=""
@@ -103,12 +185,9 @@ print("\n".join(lines))
 PY
 )"
 
-curl -fsS --max-time 20 \
-  -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-  -d "chat_id=${OWNER_ID}" \
-  --data-urlencode "text=${msg}" \
-  -d "disable_web_page_preview=true" >/dev/null 2>&1 || true
+send_telegram_chunked "$OWNER_ID" "$msg"
 
 tmp="$(mktemp)"
 jq -n --arg d "$today" '{last_day:$d,updated_at:(now|floor)}' >"$tmp"
 mv "$tmp" "$STATE_FILE"
+run_temp_cleanup_once

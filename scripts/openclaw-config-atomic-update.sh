@@ -10,8 +10,8 @@ DISALLOW_MINIMAL_TEMPLATE="${OPENCLAW_DISALLOW_MINIMAL_TEMPLATE:-1}"
 BACKUP_KEEP_COUNT="${OPENCLAW_BACKUP_KEEP_COUNT:-15}"
 BACKUP_MAX_AGE_DAYS="${OPENCLAW_BACKUP_MAX_AGE_DAYS:-7}"
 HOME_BACKUP_DIR="${OPENCLAW_HOME_BACKUP_DIR:-$HOME/backups}"
-HOME_BACKUP_KEEP_COUNT="${OPENCLAW_HOME_BACKUP_KEEP_COUNT:-5}"
-HOME_BACKUP_MAX_AGE_DAYS="${OPENCLAW_HOME_BACKUP_MAX_AGE_DAYS:-14}"
+HOME_BACKUP_KEEP_COUNT="${OPENCLAW_HOME_BACKUP_KEEP_COUNT:-2}"
+HOME_BACKUP_MAX_AGE_DAYS="${OPENCLAW_HOME_BACKUP_MAX_AGE_DAYS:-7}"
 
 JQ_FILTER=""
 JQ_FILE=""
@@ -62,8 +62,8 @@ prune_home_backup_artifacts() {
   local keep max_age remaining
   keep="$HOME_BACKUP_KEEP_COUNT"
   max_age="$HOME_BACKUP_MAX_AGE_DAYS"
-  [[ "$keep" =~ ^[0-9]+$ ]] || keep=5
-  [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=14
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=2
+  [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=7
 
   if [ ! -d "$HOME_BACKUP_DIR" ]; then
     return 0
